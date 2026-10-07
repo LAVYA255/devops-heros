@@ -1,0 +1,32 @@
+# Apply this from an admin context. It is NOT inside the path ArgoCD watches,
+# otherwise the Application would try to manage itself.
+#
+# This points at my own fork, which is public, so ArgoCD can read it with no
+# credentials. The course template had a placeholder repo URL.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: session20-gitops
+  namespace: argocd
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/LAVYA255/devops-heros.git
+    targetRevision: main
+    path: session20-monitoring-observability-gitops/gitops-app
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: session20
+
+  syncPolicy:
+    automated:
+      # prune: delete things that were removed from git
+      prune: true
+      # selfHeal: revert anything changed directly in the cluster
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+  # Ignore the Application manifest itself if it ever lands in the watched path.
+  ignoreDifferences: []
