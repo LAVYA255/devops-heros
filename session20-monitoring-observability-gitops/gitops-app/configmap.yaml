@@ -10,7 +10,7 @@ data:
     <html>
       <body style="background:#0d1117;color:#58a6ff;font-family:monospace;text-align:center;padding-top:15vh">
         <h1>GitOps demo</h1>
-        <p>version: v2</p>
+        <p>version: v3</p>
         <p style="color:#8b949e">deployed by ArgoCD from git, not by kubectl</p>
       </body>
     </html>
