@@ -208,6 +208,7 @@ jobs:
           context: ${{ env.PROJECT_DIR }}
           push: false
           load: true
+          pull: true
           tags: ${{ steps.meta.outputs.sha_tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -215,7 +216,7 @@ jobs:
       # Trivy scans the OS packages and the Python libraries inside the built
       # image, which catches things the source-level scanners cannot see.
       - name: Trivy image scan (report)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ steps.meta.outputs.sha_tag }}
           format: table
@@ -227,7 +228,7 @@ jobs:
         run: cat trivy-report.txt || true
 
       - name: Trivy image scan (gate on HIGH and CRITICAL)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ steps.meta.outputs.sha_tag }}
           format: table
@@ -355,10 +356,16 @@ jobs:
 
       - name: Deploy
         run: |
-          kubectl apply -f k8s/deployment.yaml
-          kubectl set image deployment/devsecops-api api="${IMAGE}"
-          kubectl set env deployment/devsecops-api APP_VERSION="${GITHUB_SHA::7}"
-          kubectl rollout status deployment/devsecops-api --timeout=180s
+          sed "s|image: ghcr.io/.*|image: ${IMAGE}|" k8s/deployment.yaml > /tmp/rendered.yaml
+          grep -nE 'image:|imagePullPolicy:' /tmp/rendered.yaml
+          kubectl apply -f /tmp/rendered.yaml
+          kubectl set env deployment/devsecops-api "APP_VERSION=${GITHUB_SHA::7}"
+          kubectl rollout status deployment/devsecops-api --timeout=180s || {
+            echo '--- rollout failed, dumping state'
+            kubectl get pods -l app=devsecops-api -o wide
+            kubectl describe pods -l app=devsecops-api | tail -40
+            exit 1
+          }
 
       - name: Verify
         run: |

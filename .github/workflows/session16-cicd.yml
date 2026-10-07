@@ -213,10 +213,19 @@ jobs:
 
       - name: Deploy
         run: |
-          kubectl apply -f k8s/deployment.yaml
-          kubectl set image deployment/calculator-api "api=${IMAGE}"
+          # Point the manifest at the exact image we loaded into the cluster.
+          # imagePullPolicy: IfNotPresent is already set in the manifest, so the
+          # kubelet uses that local copy instead of pulling from GHCR.
+          sed "s|image: ghcr.io/.*|image: ${IMAGE}|" k8s/deployment.yaml > /tmp/rendered.yaml
+          grep -nE 'image:|imagePullPolicy:' /tmp/rendered.yaml
+          kubectl apply -f /tmp/rendered.yaml
           kubectl set env deployment/calculator-api "APP_VERSION=${GITHUB_SHA::7}"
-          kubectl rollout status deployment/calculator-api --timeout=180s
+          kubectl rollout status deployment/calculator-api --timeout=180s || {
+            echo '--- rollout failed, dumping state'
+            kubectl get pods -l app=calculator-api -o wide
+            kubectl describe pods -l app=calculator-api | tail -40
+            exit 1
+          }
 
       - name: Verify the deployment
         run: |

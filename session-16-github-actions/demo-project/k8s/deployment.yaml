@@ -18,6 +18,9 @@ spec:
         - name: api
           # The CD job rewrites this tag to the image it just pushed to GHCR.
           image: ghcr.io/lavya255/devops-heros/calculator-api:latest
+          # The CD job loads the freshly built image straight into the cluster,
+          # so it must not try to pull it from the registry.
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 5000
           env:
