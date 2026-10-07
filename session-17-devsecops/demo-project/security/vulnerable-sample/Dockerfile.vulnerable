@@ -1,0 +1,21 @@
+# DELIBERATELY INSECURE. Not built by the pipeline.
+# Used once locally so Trivy had a genuinely vulnerable image to report on.
+# See security/README.md for the scan output next to the hardened Dockerfile.
+
+# ISSUE 1 - ancient base image, hundreds of unpatched OS CVEs.
+FROM python:3.6-slim
+
+WORKDIR /app
+COPY requirements-vulnerable.txt requirements.txt
+RUN pip install -r requirements.txt
+
+COPY . .
+
+# ISSUE 2 - a secret baked into an image layer. Anyone who pulls the image can
+# read it with `docker history` even if a later layer deletes the file.
+ENV API_TOKEN="ghp_R2d4kLm9QxT7vN1aB8cE3fH6jP0sW5yZ4uI2"
+
+# ISSUE 3 - no USER instruction, so the container runs as root. A container
+# escape then starts from uid 0.
+EXPOSE 5000
+CMD ["python", "server_vulnerable.py"]

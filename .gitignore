@@ -1,2 +1,10 @@
 ./node_modules/
 .zip
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+coverage.xml
+*.egg-info/
+.venv/
+venv/

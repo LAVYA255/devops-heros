@@ -1,0 +1,8 @@
+# DELIBERATELY OUTDATED. Not installed by the app or the image.
+# Pointed at pip-audit to prove the SCA stage finds known CVEs in dependencies
+# rather than in our own code. See security/README.md for the raw output.
+flask==0.12.2
+jinja2==2.10
+requests==2.19.1
+urllib3==1.24.1
+pyyaml==5.1

@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: devsecops-api
+  labels:
+    app: devsecops-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: devsecops-api
+  template:
+    metadata:
+      labels:
+        app: devsecops-api
+    spec:
+      # Pod-level hardening. These are the settings an image scanner and a
+      # cluster policy engine both look for.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          # The pipeline rewrites this to the image it just built and scanned.
+          image: ghcr.io/lavya255/devops-heros/devsecops-api:latest
+          ports:
+            - containerPort: 5000
+          env:
+            - name: APP_VERSION
+              value: "dev"
+            # The token comes from a Secret, never from the image or the manifest.
+            - name: API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: devsecops-api-secret
+                  key: API_TOKEN
+                  optional: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "200m"
+              memory: "128Mi"
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 5000
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 5000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            # readOnlyRootFilesystem means anything that needs to write needs
+            # an explicit writable mount.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: devsecops-api
+  labels:
+    app: devsecops-api
+spec:
+  type: ClusterIP
+  selector:
+    app: devsecops-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: 5000
