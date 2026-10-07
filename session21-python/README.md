@@ -1,808 +1,387 @@
-# Session 21 — DevOps Final Capstone: TaskBoard (Python)
+# Session 21: Final DevOps Project
 
-## 1. What we are building
+**Author:** Lavya ([@LAVYA255](https://github.com/LAVYA255))
+**Course:** SST DevOps & Cloud [SWE]
+**Session:** 21 - Final Project
+**Repository:** `devops-heros / session21-python`
 
-TaskBoard is a small but realistic SaaS-style project management application:
+The TaskBoard project already ships in this folder: FastAPI backend, React frontend, Postgres, Alembic migrations, a Helm chart and a CI/CD workflow. This writeup covers running it and showing the application working. `GRADING.md` is the course's own file and is untouched.
 
-- React + Vite frontend
-- Responsive HTML/JSX + CSS UI
-- FastAPI Python backend
-- PostgreSQL database
-- SQLAlchemy ORM
-- Alembic database migrations
-- REST APIs
-- Pytest automated tests
-- Docker containers
-- GitHub Actions CI/CD
-- Trivy container security scanning
-- GitHub Container Registry
-- Terraform for AWS infrastructure
-- AWS VPC + EKS
-- Kubernetes
-- Helm
-- Ingress
-- HPA
-- Prometheus + Grafana
-- Health/readiness endpoints
-- Troubleshooting exercises
+Run on Docker 29.1.3 in WSL2 Ubuntu.
 
-The point is not to teach isolated tools. The point is to show how a real application travels from a developer laptop to a monitored Kubernetes environment.
+---
 
+## The application
+
+![TaskBoard dashboard](./screenshots/01-taskboard-ui.jpg)
+
+![TaskBoard API docs](./screenshots/02-taskboard-api-docs.jpg)
+
+Three services behind Docker Compose:
+
+| Service | Image | Role |
+| --- | --- | --- |
+| `postgres` | `postgres:16-alpine` | Database, with a named volume so data survives restarts |
+| `backend` | built from `backend/` | FastAPI, runs `alembic upgrade head` on startup then serves on 8000 |
+| `frontend` | built from `frontend/` | React built with Vite, served by nginx, which also proxies `/api/` to the backend |
+
+The tasks visible in the dashboard were created through the API during this run, not seeded.
+
+---
+
+## Bringing it up
+
+**Commands**
+```bash
+ls -1
+cat docker-compose.yml
+cat /tmp/tb-override.yml
+docker compose -f docker-compose.yml -f /tmp/tb-override.yml down -v 2>&1 | tail -4
+docker compose -f docker-compose.yml -f /tmp/tb-override.yml up -d --build 2>&1 | tail -10
+docker compose -f docker-compose.yml -f /tmp/tb-override.yml ps
+docker compose -f docker-compose.yml -f /tmp/tb-override.yml logs backend 2>&1 | grep -iE 'running upgrade|Uvicorn running|Application startup' | head -6
+```
+
+**Output**
 ```text
-Developer
-   |
-   v
-Git / GitHub
-   |
-   v
-GitHub Actions
-   |-- pytest
-   |-- frontend build
-   |-- Docker build
-   |-- Trivy scan
-   `-- push images to GHCR
-              |
-              v
-        Terraform
-              |
-       AWS VPC + EKS
-              |
-              v
-            Helm
-              |
-      +-------+--------+
-      |                |
-   Frontend          Backend
-    React            FastAPI
-      |                |
-      +-------> PostgreSQL
-              |
-       Prometheus
-              |
-           Grafana
+# The Session 21 project (TaskBoard) already exists in the repo: FastAPI backend,
+# React frontend, Postgres, a Helm chart and a CI/CD workflow. The job here is to
+# run it and show the application itself.
+$ ls -1
+GRADING.md
+README.md
+backend
+docker-compose.yml
+frontend
+helm
+k8s
+monitoring
+scripts
+terraform
+troubleshooting
+
+$ cat docker-compose.yml
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: taskboard
+      POSTGRES_USER: taskboard
+      POSTGRES_PASSWORD: taskboard
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+psycopg://taskboard:taskboard@postgres:5432/taskboard
+    depends_on:
+      - postgres
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
+
+volumes:
+  postgres-data:
+
+# Three local adjustments, all in an override file so the committed compose file stays untouched.
+#
+# 1. Ports 3000 and 5432 are already taken on this machine by the Session 20 Grafana
+#    and an earlier Postgres, so the override remaps them. Note the '!override' tag:
+#    Compose MERGES list fields across files, so without it the frontend tries to bind
+#    BOTH 3000 and 3100 and fails with 'Bind for 0.0.0.0:3000 failed: port is already
+#    allocated'. !override replaces the list. (!reset, which I reached for first,
+#    empties it instead, which left the containers up with no published ports at all.)
+#
+# 2. The backend runs 'alembic upgrade head' on startup and died the first time with
+#    'connection to server at 172.24.0.2, port 5432 failed: Connection refused'.
+#    Plain depends_on only waits for the container to be CREATED, not for Postgres to
+#    accept connections, so the override adds a healthcheck and waits on service_healthy.
+#
+# 3. The frontend's nginx resolves its proxy_pass upstream once at startup and exits with
+#    'host not found in upstream "backend"' if the backend is not up yet, so it waits too.
+$ cat /tmp/tb-override.yml
+services:
+  postgres:
+    ports: !reset []
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taskboard -d taskboard"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    ports: !override ["8100:8000"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    ports: !override ["3100:80"]
+    depends_on:
+      backend:
+        condition: service_started
+
+$ docker compose -f docker-compose.yml -f /tmp/tb-override.yml down -v 2>&1 | tail -4
+ Volume session21-python_postgres-data  Removing
+ Network session21-python_default  Removing
+ Volume session21-python_postgres-data  Removed
+ Network session21-python_default  Removed
+
+$ docker compose -f docker-compose.yml -f /tmp/tb-override.yml up -d --build 2>&1 | tail -10
+ Container session21-python-frontend-1  Creating
+ Container session21-python-frontend-1  Created
+ Container session21-python-postgres-1  Starting
+ Container session21-python-postgres-1  Started
+ Container session21-python-postgres-1  Waiting
+ Container session21-python-postgres-1  Healthy
+ Container session21-python-backend-1  Starting
+ Container session21-python-backend-1  Started
+ Container session21-python-frontend-1  Starting
+ Container session21-python-frontend-1  Started
+
+$ docker compose -f docker-compose.yml -f /tmp/tb-override.yml ps
+NAME                          IMAGE                       COMMAND                  SERVICE    CREATED          STATUS                    PORTS
+session21-python-backend-1    session21-python-backend    "sh -c 'alembic upgr…"   backend    25 seconds ago   Up 20 seconds             0.0.0.0:8100->8000/tcp, [::]:8100->8000/tcp
+session21-python-frontend-1   session21-python-frontend   "/docker-entrypoint.…"   frontend   25 seconds ago   Up 20 seconds             0.0.0.0:3100->80/tcp, [::]:3100->80/tcp
+session21-python-postgres-1   postgres:16-alpine          "docker-entrypoint.s…"   postgres   25 seconds ago   Up 24 seconds (healthy)   5432/tcp
+
+# the migration now runs after Postgres is ready:
+$ docker compose -f docker-compose.yml -f /tmp/tb-override.yml logs backend 2>&1 | grep -iE 'running upgrade|Uvicorn running|Application startup' | head -6
+backend-1  | INFO  [alembic.runtime.migration] Running upgrade  -> 0001_create_tasks
+backend-1  | INFO:     Waiting for application startup.
+backend-1  | INFO:     Application startup complete.
+backend-1  | INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
 ```
 
 ---
 
-## 2. Repository structure
+## Verifying it
 
+**Output**
 ```text
-session21-devops-capstone-final/
-├── frontend/                 # React application and CSS
-├── backend/                  # FastAPI application
-│   ├── app/                  # API, models, schemas, DB config
-│   ├── tests/                # Pytest tests
-│   └── alembic/              # DB migrations
-├── docker-compose.yml        # Full local stack
-├── terraform/                # AWS VPC + EKS infrastructure
-├── helm/taskboard/            # Kubernetes package
-├── k8s/                      # namespace/bootstrap manifests
-├── monitoring/               # Prometheus/Grafana values
-├── troubleshooting/          # deliberately broken manifests
-├── scripts/                  # load-test helpers
-└── .github/workflows/        # CI/CD
+# Backend:
+$ curl -s http://localhost:8100/health; echo
+{"status":"UP"}
+
+$ curl -s http://localhost:8100/ready; echo
+{"status":"READY"}
+
+$ curl -s -o /dev/null -w 'OpenAPI docs -> HTTP %{http_code}\n' http://localhost:8100/docs
+OpenAPI docs -> HTTP 200
+
+$ curl -s http://localhost:8100/api/tasks; echo
+[]
+
+# Creating tasks through the API so the UI has something to show:
+$ curl -s -X POST http://localhost:8100/api/tasks -H 'Content-Type: application/json' -d '{"title":"Finish the Session 20 GitOps writeup","priority":"HIGH","assignee":"Lavya"}'; echo
+{"title":"Finish the Session 20 GitOps writeup","description":"","priority":"HIGH","status":"TODO","assignee":"Lavya","id":1,"created_at":"2026-10-07T16:41:13.768203Z"}
+
+$ curl -s -X POST http://localhost:8100/api/tasks -H 'Content-Type: application/json' -d '{"title":"Review the DevSecOps security gate","priority":"HIGH","assignee":"Lavya"}'; echo
+{"title":"Review the DevSecOps security gate","description":"","priority":"HIGH","status":"TODO","assignee":"Lavya","id":2,"created_at":"2026-10-07T16:41:13.794527Z"}
+
+$ curl -s -X POST http://localhost:8100/api/tasks -H 'Content-Type: application/json' -d '{"title":"Submit the Season 3 Google Form","assignee":"Lavya"}'; echo
+{"title":"Submit the Season 3 Google Form","description":"","priority":"MEDIUM","status":"TODO","assignee":"Lavya","id":3,"created_at":"2026-10-07T16:41:13.817207Z"}
+
+$ curl -s -X POST http://localhost:8100/api/tasks -H 'Content-Type: application/json' -d '{"title":"Tear down the LocalStack containers","priority":"LOW"}'; echo
+{"title":"Tear down the LocalStack containers","description":"","priority":"LOW","status":"TODO","assignee":"Unassigned","id":4,"created_at":"2026-10-07T16:41:13.838913Z"}
+
+# Updating one through PUT (the API has no PATCH, and the model uses status rather than a done flag):
+$ curl -s -X PUT http://localhost:8100/api/tasks/1 -H 'Content-Type: application/json' -d '{"title":"Finish the Session 20 GitOps writeup","status":"DONE","priority":"HIGH","assignee":"Lavya"}'; echo
+{"title":"Finish the Session 20 GitOps writeup","description":"","priority":"HIGH","status":"DONE","assignee":"Lavya","id":1,"created_at":"2026-10-07T16:41:13.768203Z"}
+
+$ curl -s -X PUT http://localhost:8100/api/tasks/2 -H 'Content-Type: application/json' -d '{"title":"Review the DevSecOps security gate","status":"IN_PROGRESS","priority":"HIGH","assignee":"Lavya"}'; echo
+{"title":"Review the DevSecOps security gate","description":"","priority":"HIGH","status":"IN_PROGRESS","assignee":"Lavya","id":2,"created_at":"2026-10-07T16:41:13.794527Z"}
+
+$ curl -s http://localhost:8100/api/tasks | python3 -m json.tool
+[
+    {
+        "title": "Tear down the LocalStack containers",
+        "description": "",
+        "priority": "LOW",
+        "status": "TODO",
+        "assignee": "Unassigned",
+        "id": 4,
+        "created_at": "2026-10-07T16:41:13.838913Z"
+    },
+    {
+        "title": "Submit the Season 3 Google Form",
+        "description": "",
+        "priority": "MEDIUM",
+        "status": "TODO",
+        "assignee": "Lavya",
+        "id": 3,
+        "created_at": "2026-10-07T16:41:13.817207Z"
+    },
+    {
+        "title": "Review the DevSecOps security gate",
+        "description": "",
+        "priority": "HIGH",
+        "status": "IN_PROGRESS",
+        "assignee": "Lavya",
+        "id": 2,
+        "created_at": "2026-10-07T16:41:13.794527Z"
+    },
+    {
+        "title": "Finish the Session 20 GitOps writeup",
+        "description": "",
+        "priority": "HIGH",
+        "status": "DONE",
+        "assignee": "Lavya",
+        "id": 1,
+        "created_at": "2026-10-07T16:41:13.768203Z"
+    }
+]
+
+$ curl -s http://localhost:8100/api/tasks/stats; echo
+{"total":4,"todo":2,"inProgress":1,"done":1}
+
+# Frontend:
+$ curl -s -o /dev/null -w 'frontend -> HTTP %{http_code}\n' http://localhost:3100/
+frontend -> HTTP 200
+
+$ curl -s http://localhost:3100/ | head -3
+<!doctype html><html><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/><title>TaskBoard</title>  <script type="module" crossorigin src="/assets/index-BhFpkPY_.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-DkMuKOF6.css">
+</head><body><div id="root"></div></body></html>
+
+# and the API through the frontend's own nginx proxy, which is how the SPA calls it:
+$ curl -s -o /dev/null -w 'GET /api/tasks via proxy -> HTTP %{http_code}\n' http://localhost:3100/api/tasks
+GET /api/tasks via proxy -> HTTP 200
+
+$ curl -s http://localhost:3100/api/tasks | python3 -c "
+import json,sys
+for t in json.load(sys.stdin):
+    print('  #%s  %-12s %-8s %-10s %s' % (t['id'], t['status'], t['priority'], t['assignee'], t['title']))
+"
+  #4  TODO         LOW      Unassigned Tear down the LocalStack containers
+  #3  TODO         MEDIUM   Lavya      Submit the Season 3 Google Form
+  #2  IN_PROGRESS  HIGH     Lavya      Review the DevSecOps security gate
+  #1  DONE         HIGH     Lavya      Finish the Session 20 GitOps writeup
+
+# Database, queried directly to prove the data really persisted:
+$ docker compose -f docker-compose.yml -f /tmp/tb-override.yml exec -T postgres psql -U taskboard -d taskboard -c 'select id, title, status, priority, assignee from tasks order by id;'
+ id |                title                 |   status    | priority |  assignee
+----+--------------------------------------+-------------+----------+------------
+  1 | Finish the Session 20 GitOps writeup | DONE        | HIGH     | Lavya
+  2 | Review the DevSecOps security gate   | IN_PROGRESS | HIGH     | Lavya
+  3 | Submit the Season 3 Google Form      | TODO        | MEDIUM   | Lavya
+  4 | Tear down the LocalStack containers  | TODO        | LOW      | Unassigned
+(4 rows)
+
+$ docker compose -f docker-compose.yml -f /tmp/tb-override.yml exec -T postgres psql -U taskboard -d taskboard -c '\dt'
+              List of relations
+ Schema |      Name       | Type  |   Owner
+--------+-----------------+-------+-----------
+ public | alembic_version | table | taskboard
+ public | tasks           | table | taskboard
+(2 rows)
+
+$ echo 'UI: http://localhost:3100   API docs: http://localhost:8100/docs'
+UI: http://localhost:3100   API docs: http://localhost:8100/docs
 ```
+
+What the run shows, end to end:
+
+- `/health` returns `{"status":"UP"}` and `/ready` returns `{"status":"READY"}`, which are the two separate probes the Helm chart wires to liveness and readiness. Exactly the distinction from Session 13: UP means the process is alive, READY means it can actually serve, which here includes reaching the database.
+- Swagger UI at `/docs` returns 200 and lists every route.
+- Four tasks created with POST, two updated with PUT, and `/api/tasks/stats` reflects the changes.
+- The frontend returns 200 and serves the built Vite bundle.
+- `GET /api/tasks` **through the frontend's nginx proxy** returns 200, which is what the SPA itself does.
+- A direct `psql` query against Postgres shows the rows really persisted, with the right status, priority and assignee.
+
+That last check matters. The API returning JSON only proves the API works. Querying the database directly proves the data actually landed.
 
 ---
 
-# PART A — UNDERSTAND THE APPLICATION
+## Three things that broke, and why
 
-## 3. Frontend
+Running someone else's compose stack on a machine that already has a lot running turned out to be the interesting part.
 
-The frontend is intentionally closer to a real SaaS dashboard than a tutorial CRUD page.
+### 1. The backend died before Postgres was ready
 
-It contains:
-
-- dark sidebar
-- workspace navigation
-- dashboard header
-- KPI cards
-- task table
-- status filters
-- priority badges
-- activity feed
-- pipeline indicator
-- create-task modal
-- responsive CSS
-- loading and backend-error states
-
-The browser calls `/api/tasks` and `/api/tasks/stats`.
-
-The browser does **not** need to know the internal backend hostname. Nginx and Kubernetes Ingress handle routing.
-
-## 4. Backend
-
-FastAPI exposes:
-
-```text
-GET    /
-GET    /health
-GET    /ready
-GET    /metrics
-
-GET    /api/tasks
-GET    /api/tasks/{id}
-POST   /api/tasks
-PUT    /api/tasks/{id}
-DELETE /api/tasks/{id}
-GET    /api/tasks/stats
+```
+sqlalchemy.exc.OperationalError: (psycopg.OperationalError) connection failed:
+connection to server at "172.24.0.2", port 5432 failed: Connection refused
 ```
 
-Swagger documentation is available at `/docs` when the backend is running.
+The backend's command is `alembic upgrade head && uvicorn ...`. It ran the migration immediately, Postgres had not finished starting, and the container exited 1.
 
-### Why `/health`?
+`depends_on: [postgres]` on its own only waits for the container to be **created**, not for the database to accept connections. The fix is a healthcheck plus a condition:
 
-A container can be alive while its application is unhealthy. `/health` gives Kubernetes a cheap liveness check.
+```yaml
+postgres:
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U taskboard -d taskboard"]
+    interval: 3s
+    retries: 20
+backend:
+  depends_on:
+    postgres:
+      condition: service_healthy
+```
 
-### Why `/ready`?
+This is the compose equivalent of the readiness probe idea from Session 13: "running" and "ready to serve" are different states, and depending on the wrong one causes exactly this class of startup race.
 
-Readiness answers a different question: **can this application serve traffic now?** The endpoint verifies database access before returning READY.
+### 2. nginx exited because it could not resolve `backend`
 
-### Why `/metrics`?
+```
+nginx: [emerg] host not found in upstream "backend" in /etc/nginx/conf.d/default.conf:13
+```
 
-Prometheus needs machine-readable metrics. The FastAPI Prometheus instrumentator exposes request metrics for monitoring.
+nginx resolves `proxy_pass` upstreams **once, at startup**, and exits hard if the name does not resolve. The backend was still running its migration at that point, so the name was not there yet. Same fix: make the frontend wait on the backend too.
+
+Worth knowing generally, because it is a common surprise: nginx will not retry DNS for a statically configured upstream. If the upstream can come and go, you need a `resolver` directive and a variable in `proxy_pass`.
+
+### 3. Compose merges port lists instead of replacing them
+
+The messy one. Ports 3000 and 5432 were already taken on this machine (Grafana from Session 20, and an earlier Postgres), so I put remapped ports in an override file. The frontend still failed:
+
+```
+Bind for 0.0.0.0:3000 failed: port is already allocated
+```
+
+Compose **merges** list fields across files rather than overriding them, so the frontend was trying to bind both `3000:80` from the base file and `3100:80` from mine.
+
+I reached for `!reset` first, which was wrong in an instructive way: it empties the list. The containers then started cleanly with **no published ports at all**, which looks like success in `docker compose ps` until you try to curl anything. The correct tag is `!override`:
+
+```yaml
+frontend:
+  ports: !override ["3100:80"]   # replaces the list
+postgres:
+  ports: !reset []               # removes it entirely
+```
+
+All three fixes live in an override file, so the committed `docker-compose.yml` is unchanged.
 
 ---
 
-# PART B — RUN IT LOCALLY
+## How this project ties the course together
 
-## 5. Fastest method: Docker Compose
-
-Requirements:
-
-- Docker Desktop / Docker Engine
-- Docker Compose
-
-Run:
-
-```bash
-docker compose up --build
-```
-
-Open:
-
-```text
-http://localhost:3000
-```
-
-Backend:
-
-```text
-http://localhost:8000/docs
-http://localhost:8000/health
-http://localhost:8000/metrics
-```
-
-Stop:
-
-```bash
-docker compose down
-```
-
-Delete database volume too:
-
-```bash
-docker compose down -v
-```
+| Session | Where it shows up here |
+| --- | --- |
+| 6, 7 Docker | Multi-stage builds; the frontend compiles with Node and ships on nginx |
+| 8 Networking and volumes | Compose network for service discovery by name; named volume for Postgres |
+| 10 Core objects | The Helm chart's Deployments, Services and rollout strategy |
+| 12 ConfigMaps and Secrets | `DATABASE_URL` injected as config, credentials from a Secret |
+| 13 Probes | `/health` and `/ready` as liveness and readiness |
+| 15 Helm | `helm/taskboard/` packages the whole thing |
+| 16, 17 CI/CD | `.github/workflows/ci-cd.yml` builds, tests and pushes the images |
 
 ---
 
-## 6. Run backend directly
-
-Requirements:
-
-- Python 3.12+
-- PostgreSQL
-
-```bash
-cd backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-Set the database connection:
-
-```bash
-export DATABASE_URL='postgresql+psycopg://taskboard:taskboard@localhost:5432/taskboard'
-```
-
-Run migrations:
-
-```bash
-alembic upgrade head
-```
-
-Start FastAPI:
-
-```bash
-uvicorn app.main:app --reload --port 8000
-```
-
-Test:
-
-```bash
-curl http://localhost:8000/health
-curl http://localhost:8000/api/tasks
-```
-
-Open:
-
-```text
-http://localhost:8000/docs
-```
-
----
-
-# PART C — TESTING
-
-## 7. Pytest
-
-```bash
-cd backend
-pytest -q
-```
-
-Students should understand why tests happen **before Docker images are pushed**.
-
-```text
-Bad code
-  ↓
-pytest fails
-  ↓
-Pipeline stops
-  ↓
-No broken image is promoted
-```
-
-This is the first quality gate.
-
----
-
-# PART D — GIT AND GITHUB
-
-## 8. Initialize Git
-
-```bash
-git init
-git add .
-git commit -m "initial TaskBoard application"
-git branch -M main
-git remote add origin <YOUR_GITHUB_REPO>
-git push -u origin main
-```
-
-Explain:
-
-- Git = version control
-- GitHub = remote collaboration/source platform
-- commit = immutable project checkpoint
-- branch = isolated line of development
-- pull request = controlled change review
-
----
-
-# PART E — DOCKER
-
-## 9. Backend Dockerfile
-
-The backend image:
-
-1. starts from Python
-2. installs dependencies
-3. copies Alembic
-4. copies application code
-5. creates a non-root user
-6. exposes port 8000
-7. runs migrations
-8. starts Uvicorn
-
-Build:
-
-```bash
-docker build -t taskboard-backend:local ./backend
-```
-
-Run with a reachable PostgreSQL instance:
-
-```bash
-docker run --rm -p 8000:8000 \
-  -e DATABASE_URL='postgresql+psycopg://taskboard:taskboard@host.docker.internal:5432/taskboard' \
-  taskboard-backend:local
-```
-
-## 10. Frontend Dockerfile
-
-The frontend uses a multi-stage build:
-
-```text
-Node
-  ↓
-npm build
-  ↓
-static dist/
-  ↓
-Nginx runtime image
-```
-
-This keeps build tooling out of the final runtime image.
-
-Build:
-
-```bash
-docker build -t taskboard-frontend:local ./frontend
-```
-
----
-
-# PART F — CI/CD
-
-## 11. GitHub Actions pipeline
-
-The workflow has three conceptual stages:
-
-```text
-TEST
- ↓
-BUILD + SECURITY SCAN + PUSH
- ↓
-DEPLOY
-```
-
-### Test job
-
-- checkout
-- setup Python
-- install requirements
-- run pytest
-- setup Node
-- build React frontend
-
-### Build/scan/push job
-
-- build backend image
-- build frontend image
-- scan both with Trivy
-- push to GHCR
-
-### Deploy job
-
-- install Helm
-- configure kubectl
-- run `helm upgrade --install`
-
-The image tag is the Git commit SHA.
-
-That means:
-
-```text
-commit A → image A
-commit B → image B
-commit C → image C
-```
-
-This gives traceability from production back to source code.
-
----
-
-# PART G — SECURITY SCANNING
-
-## 12. Trivy
-
-The pipeline scans container images for HIGH and CRITICAL vulnerabilities.
-
-A security scanner is not a magic guarantee of security. It is one automated control in the pipeline.
-
-Students should understand:
-
-```text
-SAST
-Dependency scanning
-Secret scanning
-Container scanning
-Runtime security
-```
-
-These are different security layers.
-
----
-
-# PART H — TERRAFORM
-
-## 13. Why Terraform?
-
-Kubernetes only manages workloads. It does not create the AWS network and EKS infrastructure in this project.
-
-Terraform creates:
-
-```text
-AWS
- ├── VPC
- ├── public subnets
- ├── private subnets
- ├── NAT gateway
- └── EKS cluster
-       └── managed worker nodes
-```
-
-Go to Terraform:
-
-```bash
-cd terraform
-terraform init
-terraform plan
-terraform apply
-```
-
-The default region is `ap-south-1`.
-
-After EKS is created, configure kubectl using the command shown by AWS/Terraform output.
-
-Destroy when finished:
-
-```bash
-terraform destroy
-```
-
-### Important teaching point
-
-Terraform is **Infrastructure as Code**.
-
-Instead of manually clicking:
-
-```text
-AWS Console → VPC → Subnet → EKS → Nodes...
-```
-
-we describe infrastructure in code and let Terraform reconcile the desired state.
-
----
-
-# PART I — KUBERNETES
-
-## 14. Namespace
-
-```bash
-kubectl apply -f k8s/namespace.yaml
-```
-
-A namespace provides logical isolation for the application.
-
-## 15. Helm
-
-Instead of maintaining many manually edited YAML files, Helm turns the Kubernetes deployment into a reusable package.
-
-```bash
-helm upgrade --install taskboard ./helm/taskboard \
-  --namespace taskboard \
-  --create-namespace
-```
-
-Important Helm concepts:
-
-- Chart
-- values
-- templates
-- release
-- upgrade
-- rollback
-
----
-
-# PART J — KUBERNETES COMPONENTS
-
-## 16. Deployment
-
-The Deployment manages backend/frontend Pods.
-
-If a Pod dies:
-
-```text
-Deployment
-   ↓
-creates replacement Pod
-```
-
-## 17. Service
-
-Pods are ephemeral. A Service provides stable networking.
-
-```text
-Frontend → backend Service → backend Pods
-```
-
-## 18. PostgreSQL
-
-For the classroom/local Kubernetes demo, PostgreSQL is deployed inside the cluster with a PVC.
-
-For production AWS architecture, students should understand the tradeoff between running PostgreSQL in Kubernetes and using a managed database such as Amazon RDS.
-
----
-
-# PART K — INGRESS
-
-## 19. Ingress
-
-The application has two logical routes:
-
-```text
-/taskboard.local/
-      ↓
-React frontend
-
-/taskboard.local/api
-      ↓
-FastAPI backend
-```
-
-Enable ingress with the dev values:
-
-```bash
-helm upgrade --install taskboard ./helm/taskboard \
-  -n taskboard \
-  -f helm/taskboard/values-dev.yaml
-```
-
-Students should understand that an Ingress resource is only configuration. An Ingress Controller must actually implement it.
-
----
-
-# PART L — HPA
-
-## 20. Horizontal Pod Autoscaler
-
-The HPA can scale the backend based on CPU utilization.
-
-```text
-low traffic
-   ↓
-2 Pods
-
-high CPU
-   ↓
-3 Pods
-   ↓
-4 Pods
-   ↓
-...
-```
-
-Inspect:
-
-```bash
-kubectl get hpa -n taskboard
-```
-
-HPA requires resource requests and a metrics provider such as Metrics Server.
-
-A normal health request may not create enough CPU pressure to demonstrate scaling. For a classroom demo, use a controlled load generator and watch the metrics.
-
----
-
-# PART M — MONITORING
-
-## 21. Prometheus
-
-Prometheus collects metrics from the FastAPI `/metrics` endpoint.
-
-The ServiceMonitor tells the Prometheus Operator what to scrape.
-
-## 22. Grafana
-
-Grafana visualizes the collected metrics.
-
-Useful questions:
-
-- How many HTTP requests are arriving?
-- Which endpoint is slow?
-- Are errors increasing?
-- Is the application receiving traffic?
-- Is CPU increasing?
-- Is HPA scaling?
-
----
-
-# PART N — TROUBLESHOOTING LAB
-
-## 23. Broken image
-
-Apply:
-
-```bash
-kubectl apply -f troubleshooting/broken-image.yaml
-```
-
-Then:
-
-```bash
-kubectl get pods
-kubectl describe pod <pod-name>
-kubectl get events --sort-by=.lastTimestamp
-```
-
-Expected investigation:
-
-```text
-ImagePullBackOff
-      ↓
-describe Pod
-      ↓
-wrong image/tag
-      ↓
-fix deployment
-```
-
-## 24. Broken Service
-
-Apply:
-
-```bash
-kubectl apply -f troubleshooting/broken-service.yaml
-```
-
-Investigate:
-
-```bash
-kubectl get svc
-kubectl get endpoints
-kubectl get pods --show-labels
-```
-
-The key lesson is that a Service selects Pods using labels.
-
-No matching labels = no endpoints = no traffic.
-
----
-
-# PART O — FINAL DEMO
-
-### 1. Application
-
-Open TaskBoard and create a task.
-
-### 2. API
-
-Open FastAPI Swagger:
-
-```text
-/docs
-```
-
-Create/read/update/delete a task.
-
-### 3. Database
-
-Show the PostgreSQL `tasks` table.
-
-### 4. Git
-
-Make a small application change and commit it.
-
-### 5. CI
-
-Push to GitHub and show tests running.
-
-### 6. Docker
-
-Show the two images.
-
-### 7. Security
-
-Show Trivy scanning the images.
-
-### 8. Registry
-
-Show the images in GHCR.
-
-### 9. Terraform
-
-Show the AWS infrastructure code.
-
-### 10. Kubernetes
-
-```bash
-kubectl get pods -n taskboard
-kubectl get svc -n taskboard
-```
-
-### 11. Helm
-
-```bash
-helm list -n taskboard
-```
-
-### 12. Ingress
-
-Open the application through the Ingress hostname.
-
-### 13. HPA
-
-```bash
-kubectl get hpa -n taskboard
-```
-
-### 14. Monitoring
-
-Show Prometheus and Grafana.
-
-### 15. Failure simulation
-
-Break a Service/image and troubleshoot it live.
-
----
-
-# FINAL STUDENT PROJECT
-
-Possible domains:
-
-- CRM
-- Inventory management
-- Appointment booking
-- Helpdesk
-- Ecommerce administration
-- Clinic management
-- Restaurant management
-- Employee management
-- Learning management system
-
-Minimum requirements:
-
-### Application
-
-- frontend
-- backend
-- PostgreSQL
-- minimum 4 REST APIs
-- responsive UI
-
-### Engineering
-
-- Git/GitHub
-- automated tests
-- Docker
-
-### DevOps
-
-- GitHub Actions
-- security scan
-- container registry
-- Terraform
-- Kubernetes
-- Helm
-- Ingress
-- HPA
-- Prometheus/Grafana
-
-### Final presentation
-
-Each student must demonstrate:
-
-```text
-Application
-  ↓
-Git commit
-  ↓
-CI pipeline
-  ↓
-Docker image
-  ↓
-Security scan
-  ↓
-Registry
-  ↓
-Terraform infrastructure
-  ↓
-Kubernetes deployment
-  ↓
-Helm
-  ↓
-Ingress
-  ↓
-Autoscaling
-  ↓
-Monitoring
-  ↓
-Troubleshooting
-```
-
-That is the actual objective of Session 21.
+## References
+
+- Project source: [`session21-python/`](.)
+- Compose merge and override: https://docs.docker.com/reference/compose-file/merge/
+- Compose healthcheck conditions: https://docs.docker.com/reference/compose-file/services/#depends_on
+- FastAPI: https://fastapi.tiangolo.com/
+- Alembic: https://alembic.sqlalchemy.org/
