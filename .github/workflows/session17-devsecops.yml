@@ -262,6 +262,10 @@ jobs:
     if: always()
     steps:
       - name: Evaluate all security stages
+        # This job needs no repo files, so it overrides the workflow-level
+        # working-directory, which would otherwise point at a path that only
+        # exists after a checkout.
+        working-directory: ${{ github.workspace }}
         run: |
           echo "SAST (bandit)        : ${{ needs.sast.result }}"
           echo "SCA (pip-audit)      : ${{ needs.sca.result }}"
