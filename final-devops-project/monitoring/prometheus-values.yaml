@@ -1,0 +1,94 @@
+# prometheus-community/prometheus 29.37.0 (Prometheus v3.15.0)
+#   helm upgrade --install prometheus prometheus-community/prometheus \
+#     --version 29.37.0 -n monitoring -f monitoring/prometheus-values.yaml
+#
+# How it finds the app: the chart's built-in "kubernetes-pods" job scrapes any
+# pod annotated prometheus.io/scrape=true, using prometheus.io/port and
+# prometheus.io/path. The Kharcha chart puts those annotations on the backend
+# pods, so there is no per-app scrape config to keep in sync with the
+# deployment. A new pod is scraped as soon as it exists.
+
+# Not needed for this project. Alerts are still evaluated and visible on the
+# Prometheus /alerts page; wiring them to Slack or email is one Alertmanager
+# away.
+alertmanager:
+  enabled: false
+prometheus-pushgateway:
+  enabled: false
+
+# Node-level CPU/memory/disk. Small, and it makes the cluster panels honest.
+prometheus-node-exporter:
+  enabled: true
+
+# Kubernetes object state: restarts, HPA replicas, deployment rollouts.
+kube-state-metrics:
+  enabled: true
+
+server:
+  retention: 3d
+  persistentVolume:
+    enabled: true
+    size: 2Gi
+  global:
+    scrape_interval: 15s
+    evaluation_interval: 15s
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
+serverFiles:
+  alerting_rules.yml:
+    groups:
+      - name: kharcha
+        rules:
+          # Every backend pod gone from the scrape targets, or failing scrapes.
+          - alert: KharchaBackendDown
+            expr: sum(up{job="kubernetes-pods", namespace="kharcha", app_kubernetes_io_component="backend"}) < 1
+            for: 1m
+            labels:
+              severity: critical
+            annotations:
+              summary: No Kharcha backend pod is being scraped successfully.
+
+          # 5xx share of all API traffic over 5 minutes.
+          - alert: KharchaHighErrorRate
+            expr: |
+              sum(rate(kharcha_http_requests_total{status=~"5.."}[5m]))
+                / clamp_min(sum(rate(kharcha_http_requests_total[5m])), 1e-9) > 0.05
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: More than 5% of Kharcha API requests are failing with 5xx.
+
+          - alert: KharchaSlowRequests
+            expr: |
+              histogram_quantile(0.95,
+                sum by (le) (rate(kharcha_http_request_duration_seconds_bucket{route!="/health"}[5m]))) > 0.5
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: Kharcha API p95 latency is above 500ms.
+
+          # Pods restarting is the earliest sign of a crash loop.
+          - alert: KharchaPodRestarting
+            expr: increase(kube_pod_container_status_restarts_total{namespace="kharcha"}[15m]) > 2
+            labels:
+              severity: warning
+            annotations:
+              summary: "{{ $labels.pod }} restarted more than twice in 15 minutes."
+
+          # The HPA is pinned at its ceiling: either real load or a runaway.
+          - alert: KharchaHPAAtMax
+            expr: |
+              kube_horizontalpodautoscaler_status_current_replicas{namespace="kharcha"}
+                >= kube_horizontalpodautoscaler_spec_max_replicas{namespace="kharcha"}
+            for: 10m
+            labels:
+              severity: info
+            annotations:
+              summary: The backend HPA has been at max replicas for 10 minutes.
