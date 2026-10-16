@@ -25,6 +25,7 @@ That is the application. The project is everything around it: tests that gate ev
 - [Monitoring](#monitoring)
 - [GitOps](#gitops)
 - [Troubleshooting](#troubleshooting)
+- [Demo script](#demo-script)
 - [Screenshots](#screenshots)
 - [Lessons learned](#lessons-learned)
 
@@ -39,11 +40,11 @@ That is the application. The project is everything around it: tests that gate ev
 | M5 CI/CD | [`.github/workflows/final-project.yml`](../.github/workflows/final-project.yml) (copy in [`.github/`](.github/workflows/final-project.yml)) | [run 38935423932](https://github.com/LAVYA255/devops-heros/actions/runs/38935423932), `screenshots/10-github-actions-run.jpg`, `11-ghcr-package.jpg` |
 | M6 DevSecOps | [`security/`](security), Trivy steps in the workflow | `terminal/37-ci-trivy-gate.png`, `15-image-scan-trivy.png` |
 | M7 Terraform | [`terraform/`](terraform) | `terminal/17` to `20-terraform-*.png` (LocalStack, see caveat) |
-| M8 Kubernetes + Helm | [`kubernetes/`](kubernetes) (the rubric's `k8s/`), [`helm/kharcha/`](helm/kharcha) | `terminal/07-helm-install.png`, `35-final-cluster-state.png`, `09-ingress-routing.png` |
+| M8 Kubernetes + Helm | [`kubernetes/`](kubernetes) (the rubric's `k8s/`), [`helm/kharcha/`](helm/kharcha) | `terminal/07-helm-install.png`, `35-final-cluster-state.png`, `09-ingress-routing.png`, `38-hpa-autoscaling.png` |
 | M9 Observability | [`monitoring/`](monitoring), `/metrics` in [`metrics.py`](application/backend/app/metrics.py) | `terminal/34-metrics-endpoint.png`, `screenshots/07-prometheus-targets.jpg`, `09-grafana-dashboard.jpg` |
 | M10 Docs + demo | this file, [`gitops/README.md`](gitops/README.md#the-live-demo-one-commit-to-running-pods) | `terminal/31-gitops-demo.png`, `screenshots/04` to `06-demo-*.jpg` |
 
-The folder layout follows the Session 21 assignment (`application/ docker/ kubernetes/ helm/ terraform/ .github/workflows/ security/ monitoring/ gitops/`), plus `troubleshooting/` and `screenshots/`.
+The folder layout follows the Session 21 assignment (`application/ docker/ kubernetes/ helm/ terraform/ .github/workflows/ security/ monitoring/ gitops/`), plus `scripts/` (the load test), `troubleshooting/` and `screenshots/`.
 
 ## Architecture
 
@@ -118,7 +119,29 @@ Details worth knowing:
 
 ```bash
 cd final-devops-project
-docker compose up --build        # http://localhost:3000
+docker compose up --build        # http://localhost:3000 (UI), :8000/docs (Swagger)
+```
+
+**Run it without Docker** (the fast edit loop from the course guide; tested with Python 3.14 and Node 24, `terminal/41-run-without-docker.png`). Only Postgres runs in a container, published on `127.0.0.1:5432` and never on the network:
+
+```bash
+docker compose up -d postgres
+
+cd application/backend
+python3 -m venv .venv && . .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+export DATABASE_URL='postgresql+psycopg://kharcha:kharcha_local_dev_only@localhost:5432/kharcha'
+alembic upgrade head
+uvicorn app.main:app --reload --port 8000           # http://localhost:8000/docs
+
+cd ../frontend && npm install && npm run dev        # http://localhost:5173, /api proxied to :8000
+```
+
+```text
+{"status":"UP","version":"venv"}        <- /health from the venv
+Swagger UI /docs -> HTTP 200            11 routes listed in /openapi.json
+GET http://localhost:5173/  -> HTTP 200
+{"status":"UP","version":"venv"}        <- the same /health through the Vite proxy
 ```
 
 **Tests:** 33 tests, 100% line coverage, on an in-memory SQLite database (never a real one), with a dependency override and a fresh schema per test. They cover all CRUD routes, validation, month filtering, the summary maths, the metrics labels, the readiness failure path and the database wait loop. CI fails under 90% coverage.
@@ -186,6 +209,8 @@ POST Rent for October 9000.00 -> 201  ...  (8 expenses seeded through the Ingres
 {"month":"2026-10","total":"17868.50","count":8,"budget":"20000.00","budget_used_pct":89.3, ...}
 ```
 
+**Postgres in the cluster, or RDS?** Here Postgres is a StatefulSet with a 1 Gi volume, which is right for a laptop cluster and a demo. In production on AWS I would use a managed database (RDS): backups, point-in-time restore, Multi-AZ failover and patching become AWS's job, and the database no longer competes with the app for node CPU (scenario 11 in troubleshooting is exactly that competition). The chart supports it already: `--set postgres.enabled=false --set database.host=<rds endpoint>`, and it refuses the ambiguous combination of both.
+
 Every pod runs non-root, with a read-only root filesystem, all capabilities dropped, no privilege escalation, seccomp `RuntimeDefault` and no service-account token, proved on the live pods (`terminal/11-security-context.png`):
 
 ```text
@@ -221,6 +246,39 @@ frontend /healthz         ok
 api via frontend nginx    200
 all checks passed
 ```
+
+### Autoscaling under load
+
+The HPA scales the backend between 2 and 6 pods at 70% of the CPU request. [`scripts/load-test.sh`](scripts/load-test.sh) drives controlled traffic through the Ingress (40 workers, 4 minutes), as the course guide suggests, and a watcher samples the HPA every 10 seconds (`terminal/38-hpa-autoscaling.png`):
+
+```text
+19:24:07  cpu=  5%  replicas current=2 desired=2
+19:24:21  cpu=873%  replicas current=2 desired=4  pods: 2 Init  2 Running
+19:24:37  cpu=873%  replicas current=4 desired=6
+19:25:06  cpu=873%  replicas current=6 desired=6  pods: 6 Running
+SuccessfulRescale   New size: 4; reason: cpu resource utilization (percentage of request) above target
+SuccessfulRescale   New size: 6; reason: cpu resource utilization (percentage of request) above target
+```
+
+ArgoCD stayed Synced while the HPA changed the replica count, because the chart leaves `replicas` to the HPA. The first run also exposed a real bug: 312 requests failed with 500 because Postgres's liveness probe restarted the database while it was busy ([troubleshooting #11](troubleshooting/README.md#11-under-load-a-liveness-probe-restarted-the-database)). After the fix, the same test:
+
+```text
+$ bash scripts/load-test.sh 240 40 http://192.168.49.2 kharcha.local
+done: 33444 requests in 241s (~138 req/s), ok=33444 failed=0
+
+19:40:22  cpu=951%  replicas current=2 desired=4  postgres restarts=0
+19:40:37  cpu=951%  replicas current=4 desired=6  postgres restarts=0
+19:40:57  cpu=951%  replicas current=6 desired=6  postgres restarts=0  pods: 6 Running
+Ingress responses during the test: only 200 and 201
+```
+
+| | before the fix | after |
+| --- | --- | --- |
+| requests in 4 minutes | 21,474 (~88/s) | 33,444 (~138/s) |
+| failed | 409 (312 x 500, 103 client timeouts) | 0 |
+| Postgres restarts | 1, mid-load | 0 |
+
+Full captures: `terminal/38-hpa-autoscaling.png` (before) and `terminal/38b-hpa-after-fix.png` (after). A backend rollout happened to finish during the first seconds of the second run, with no failed request either, which is the preStop fix from troubleshooting #6 doing its job.
 
 ## Terraform
 
@@ -288,7 +346,29 @@ Full write-up and the timed demo: [`gitops/README.md`](gitops/README.md). ArgoCD
 
 ## Troubleshooting
 
-Full write-up: [`troubleshooting/README.md`](troubleshooting/README.md). Five faults injected into a separate lab namespace (wrong DB host, missing image tag, re-created DB secret, wrong Service port, wrong scrape port), each taken through identify, investigate, root cause, fix and verify; plus five real incidents from building this. Two of the injected faults uncovered **real bugs in my chart** that no test had caught: a typo in `database.host` silently swapped in an empty database, and rolling updates dropped about 1% of requests.
+Full write-up: [`troubleshooting/README.md`](troubleshooting/README.md). Five faults injected into a separate lab namespace (wrong DB host, missing image tag, re-created DB secret, wrong Service port, wrong scrape port) and the course guide's two broken-manifest labs ([`broken-image.yaml`](troubleshooting/broken-image.yaml), [`broken-service.yaml`](troubleshooting/broken-service.yaml)), each taken through identify, investigate, root cause, fix and verify; plus the real incidents from building this. Breaking things on purpose uncovered **three real bugs in my chart** that no test had caught: a typo in `database.host` silently swapped in an empty database, rolling updates dropped about 1% of requests, and under load a liveness probe restarted Postgres.
+
+## Demo script
+
+The order the Session 21 guide asks for, with the exact commands for Kharcha. Every step was run while building this; the evidence for each is in the screenshot column.
+
+| # | Step | Do this | Evidence |
+| --- | --- | --- | --- |
+| 1 | Application | `kubectl port-forward -n ingress-nginx svc/ingress-nginx-controller 8088:80`, open `http://kharcha.127.0.0.1.nip.io:8088` (or `localhost:3000` with Compose), add an expense, watch the budget card change | `03-app-on-kubernetes.jpg`, `01`/`02-app-*.jpg` |
+| 2 | API | `/docs` (Swagger): create, read, update, delete an expense | `terminal/41-run-without-docker.png` |
+| 3 | Database | `kubectl exec -n kharcha kharcha-postgres-0 -- psql -U kharcha -d kharcha -c 'select id, title, amount, category from expenses order by id desc limit 5;'` | `terminal/08-migrations-advisory-lock.png` |
+| 4 | Git | change something visible (e.g. a label in `application/frontend/src/App.jsx`), `git commit`, `git push` | `terminal/36-git-history.png` |
+| 5 | CI | Actions tab: tests, scans, gate, push, kind deploy | `10-github-actions-run.jpg` |
+| 6 | Docker | `docker images \| grep kharcha`; both Dockerfiles are multi-stage and non-root | `terminal/04-nonroot-images.png` |
+| 7 | Security | the Trivy steps in the run; the 43-CVE story | `terminal/37-ci-trivy-gate.png`, `15-image-scan-trivy.png` |
+| 8 | Registry | GHCR package page, SHA tags only | `11-ghcr-package.jpg` |
+| 9 | Terraform | `terraform/` code and the LocalStack plan/apply/destroy | `terminal/17` to `20-terraform-*.png` |
+| 10 | Kubernetes | `kubectl get pods,svc -n kharcha` | `terminal/35-final-cluster-state.png` |
+| 11 | Helm / GitOps | `helm template` of the chart; ArgoCD picks up the bot's tag commit and rolls out (about 7 min from push) | `terminal/31-gitops-demo.png` |
+| 12 | Ingress | `curl -H 'Host: kharcha.local' http://$(minikube ip)/` and `/api/...` | `terminal/09-ingress-routing.png` |
+| 13 | HPA | `./scripts/load-test.sh 240 40 http://$(minikube ip) kharcha.local` and `kubectl get hpa -n kharcha -w` | `terminal/38-hpa-autoscaling.png`, `38b-hpa-after-fix.png` |
+| 14 | Monitoring | Prometheus targets, Grafana dashboard (port-forward 9090 / 3001) | `07`, `08`, `09-*.jpg` |
+| 15 | Failure | `kubectl apply -n kharcha-lab -f troubleshooting/broken-service.yaml`, find it from the endpoints | `terminal/40-lab-broken-service.png` |
 
 ## Screenshots
 
@@ -303,15 +383,16 @@ Browser (`screenshots/`):
 | `09-grafana-dashboard.jpg` | the dashboard with live traffic and a rollout in progress |
 | `10-github-actions-run.jpg`, `11-ghcr-package.jpg` | a green pipeline run, SHA-tagged images on GHCR |
 
-Terminal captures (`screenshots/terminal/`), rendered from the real command output: tests and Compose (01 to 04), Kubernetes and Helm (05 to 11), security scans (12 to 16, 37), Terraform (17 to 20), GitOps and monitoring (21 to 23, 31, 32, 34, 35), troubleshooting lab (24 to 30), Compose dev override (33), git history (36).
+Terminal captures (`screenshots/terminal/`), rendered from the real command output: tests and Compose (01 to 04), Kubernetes and Helm (05 to 11), security scans (12 to 16, 37), Terraform (17 to 20), GitOps and monitoring (21 to 23, 31, 32, 34, 35), troubleshooting lab (24 to 30), Compose dev override (33), git history (36), autoscaling before and after the Postgres fix (38, 38b), the broken-manifest labs (39, 40), running without Docker (41).
 
 ## Lessons learned
 
 1. **Green is not correct.** My most dangerous bug passed every probe: a typo created an empty second database and the app happily used it. Readiness checks prove *a* database answers, not that it is *the* one. Breaking things on purpose found it; testing the happy path never would have.
-2. **Measure, do not guess.** "Sometimes the Ingress hangs" became "29 of 100 requests", which is 7 of 24 workers, which pointed straight at the dead nginx workers. "Deploys are fine" became "5 of 450 requests fail", which found the missing preStop hook.
-3. **Defaults are sized for someone else's machine.** nginx's `worker_processes auto` counts the node's 24 CPUs, not the container's 0.2. Both the ingress controller and my own frontend got it wrong.
-4. **Unit tests cannot test what they bypass.** Tests built the schema with `create_all()`, so a broken `alembic.ini` that crash-looped the real container passed them all. The fix was a pipeline job that runs the real migrations on a real Postgres.
-5. **Gates are only useful if you let them fail you.** The coverage floor failed my first pipeline run (89.45%) and found untested startup code. The Trivy gate failed my frontend and found 43 CVEs I did not know I was shipping. Lowering the bar would have been easier and wrong.
-6. **Kubernetes does things in parallel that you assume are sequential.** Endpoint removal and SIGTERM happen at the same time. Init containers and Helm hooks run at different moments, and ArgoCD maps Helm hooks its own way, which is why migrations are an init container here.
-7. **GitOps changes the question from "what did I run?" to "what does git say?"** Rollback is `git revert`, the audit log is `git log`, and a hand edit in the cluster lasts about two seconds.
-8. **Write down what you could not do.** LocalStack has no EKS. Saying so, showing the 501, and giving the real-AWS commands is more useful than a screenshot that implies otherwise.
+2. **A liveness probe is a loaded gun.** It should fire only when a process is truly stuck. Postgres's 1-second `pg_isready` check restarted the database exactly when it was busiest, which turned a slow database into a down one for every pod at once.
+3. **Measure, do not guess.** "Sometimes the Ingress hangs" became "29 of 100 requests", which is 7 of 24 workers, which pointed straight at the dead nginx workers. "Deploys are fine" became "5 of 450 requests fail", which found the missing preStop hook.
+4. **Defaults are sized for someone else's machine.** nginx's `worker_processes auto` counts the node's 24 CPUs, not the container's 0.2. Both the ingress controller and my own frontend got it wrong.
+5. **Unit tests cannot test what they bypass.** Tests built the schema with `create_all()`, so a broken `alembic.ini` that crash-looped the real container passed them all. The fix was a pipeline job that runs the real migrations on a real Postgres.
+6. **Gates are only useful if you let them fail you.** The coverage floor failed my first pipeline run (89.45%) and found untested startup code. The Trivy gate failed my frontend and found 43 CVEs I did not know I was shipping. Lowering the bar would have been easier and wrong.
+7. **Kubernetes does things in parallel that you assume are sequential.** Endpoint removal and SIGTERM happen at the same time. Init containers and Helm hooks run at different moments, and ArgoCD maps Helm hooks its own way, which is why migrations are an init container here.
+8. **GitOps changes the question from "what did I run?" to "what does git say?"** Rollback is `git revert`, the audit log is `git log`, and a hand edit in the cluster lasts about two seconds.
+9. **Write down what you could not do.** LocalStack has no EKS. Saying so, showing the 501, and giving the real-AWS commands is more useful than a screenshot that implies otherwise.

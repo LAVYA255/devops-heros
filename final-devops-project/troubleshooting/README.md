@@ -22,6 +22,9 @@ The lab has a small curl pod (`probe`) inside the namespace, so every check goes
 | 8 | ArgoCD never in sync | real | StatefulSet always OutOfSync | defaulted fields missing from template |
 | 9 | CI deploy fails at helm install | real | `failed calling webhook` | race with the ingress controller restart |
 | 10 | Pipeline red on a green test suite | real | coverage 89.45% < 90% | new code with no tests |
+| 11 | 500s while the HPA scales out | **real bug found** | 312 of 21,474 requests fail under load | liveness probe restarted Postgres |
+| L1 | [`broken-image.yaml`](./broken-image.yaml) | manifest lab | `ImagePullBackOff` | tag never pushed |
+| L2 | [`broken-service.yaml`](./broken-service.yaml) | manifest lab | connection refused, pods all Ready | selector matches no pods |
 
 ---
 
@@ -317,6 +320,92 @@ FAIL Required test coverage of 90% not reached. Total coverage: 89.45%
 ```
 
 My local number said 96%, but it was from before I wrote `wait_for_database()`, so the retry loop that keeps pods out of a crash loop had **no tests**, and neither did the 503 branch of `/ready`, the whole point of a readiness probe. I added 5 tests (first-try success, retry until Postgres is up, give up after the timeout, session always closed, `/ready` 503 while `/health` stays 200). Now 33 tests, 100%. The coverage gate did its job.
+
+## 11. Under load, a liveness probe restarted the database
+
+Found while demonstrating the HPA with [`scripts/load-test.sh`](../scripts/load-test.sh) (40 workers through the Ingress for 4 minutes). The backend scaled 2 → 4 → 6 as designed, but:
+
+```text
+done: 21474 requests in 242s (~88 req/s), ok=21065 failed=409
+```
+
+**Investigate.** Split the failures by status in the ingress log, then read the backend's exceptions:
+
+```text
+  21065 200
+    262 201
+    103 499     <- client gave up after 5s, all at 19:23, before the HPA reacted
+    312 500     <- the application failing
+
+    132 psycopg.OperationalError: ... FATAL:  the database system is shutting down
+    104 psycopg.OperationalError: ... port 5432 failed: Connection refused
+     27 sqlalchemy.exc.OperationalError: (psycopg.errors.AdminShutdown) terminating connection due to administrator command
+```
+
+The database was going down in the middle of the test. Why:
+
+```text
+$ kubectl get pod kharcha-postgres-0
+RESTARTS 1   LAST_REASON Completed   FINISHED 2026-10-16T19:25:11Z
+Liveness probe failed: command timed out: "pg_isready ..." timed out after 1s
+liveness={... "timeoutSeconds":1, "failureThreshold":3 ...}
+19:26:30 postgres cpu cores: 0.5      <- exactly its 500m limit
+```
+
+**Root cause.** Six backend pods drove Postgres to its CPU limit, where it was throttled. `pg_isready` then took longer than its 1-second timeout, three times in a row, so the kubelet decided the database was dead and **restarted it in the middle of the load**. Every backend pod lost its connections at once. A liveness probe that cannot tell "busy" from "stuck" turns a slow database into a down one. It is the same lesson as the backend's `/health` not checking the database, one layer down.
+
+**Fix (commit 790e12f).**
+
+- Postgres liveness: 5 s timeout, 6 failures, so a full minute of no answer before a restart. Readiness timeout 3 s.
+- Postgres CPU: request 250m, limit 1500m. One database serves every backend replica.
+- Backend connection pool: 5 + 5 per pod with a 10 s timeout. At the HPA maximum of 6 pods that is at most 60 of Postgres's 100 connections (SQLAlchemy's default 5 + 10 would have been 90).
+
+**Verify.** The identical test after the fix (`screenshots/terminal/38b-hpa-after-fix.png`):
+
+```text
+done: 33444 requests in 241s (~138 req/s), ok=33444 failed=0
+19:40:57  cpu=951%  replicas current=6 desired=6  postgres restarts=0
+kharcha-postgres-0   RESTARTS 0   READY true
+```
+
+More throughput (138 req/s instead of 88) and not one failed request, with the HPA going 2 → 4 → 6 exactly as before.
+
+## Manifest labs (from the course guide)
+
+Self-contained broken YAML, applied into the lab namespace. Each one passes the restricted Pod Security policy, so the only thing wrong is the bug. (The first version of `broken-image.yaml` did not: the pipeline's config scan failed it for a missing read-only root filesystem, which is now fixed.)
+
+### L1. `broken-image.yaml`
+
+```text
+$ kubectl get pods -l app=broken-image
+broken-image-...   0/1   ImagePullBackOff
+$ kubectl describe pod -l app=broken-image
+    Image:  ghcr.io/lavya255/kharcha-frontend:does-not-exist
+  Warning  Failed  ... Error: ImagePullBackOff
+$ kubectl set image deploy/broken-image web=ghcr.io/lavya255/kharcha-frontend:ac8a8d7
+broken-image-...   true   Running   ghcr.io/lavya255/kharcha-frontend:ac8a8d7
+```
+
+### L2. `broken-service.yaml`
+
+A Service whose selector says `component: api` next to pods labelled `component: backend`:
+
+```text
+$ curl http://backend-broken:8000/health
+curl exit 7: nothing behind the Service
+$ kubectl get endpointslices -l kubernetes.io/service-name=backend-broken
+backend-broken-t5x68   <none>
+$ kubectl get svc backend-broken -o jsonpath='{.spec.selector}'
+{"app.kubernetes.io/component":"api", ...}
+$ kubectl get pods --show-labels   ->   app.kubernetes.io/component=backend, ...
+$ kubectl patch svc backend-broken ... '{"spec":{"selector":{"app.kubernetes.io/component":"backend"}}}'
+backend-broken-t5x68   10.244.0.77,10.244.0.76
+{"status":"UP","version":"a5e2e0d"}
+```
+
+A Service finds its pods only by labels. One wrong value means no endpoints, while every pod looks healthy.
+
+Captures: `screenshots/terminal/39-lab-broken-image.png`, `40-lab-broken-service.png`.
 
 ---
 
