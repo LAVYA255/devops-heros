@@ -1,0 +1,16 @@
+# Remote state for a real AWS account. Rename to backend.tf, create the bucket
+# and table once (by hand or from a tiny bootstrap stack), then run
+# `terraform init -migrate-state`.
+#
+# Why: local state lives on one laptop, cannot be shared, and has no lock, so
+# two people running apply at once can corrupt it. S3 keeps versions of every
+# state file and the DynamoDB table makes the second apply wait.
+terraform {
+  backend "s3" {
+    bucket         = "kharcha-terraform-state-<account-id>"
+    key            = "prod/network-eks.tfstate"
+    region         = "ap-south-1"
+    dynamodb_table = "kharcha-terraform-locks"
+    encrypt        = true
+  }
+}
