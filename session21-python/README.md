@@ -9,6 +9,8 @@ The TaskBoard project already ships in this folder: FastAPI backend, React front
 
 Run on Docker 29.1.3 in WSL2 Ubuntu.
 
+> **The capstone project itself is in [`final-devops-project/`](../final-devops-project/README.md).** Since a clone of TaskBoard scores zero, I built my own application for it, **Kharcha**, an expense tracker, and took it through every module: tests, Docker, a CI/CD pipeline with a security gate, Kubernetes and Helm, Terraform for AWS, Prometheus and Grafana, and GitOps with ArgoCD. This page stays as the writeup of running the TaskBoard reference.
+
 ---
 
 ## The application

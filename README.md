@@ -32,10 +32,12 @@
 | 19 | Cloud & Terraform in action | [README](session19-cloud-terraform/README.md) |
 | 20 | Monitoring, observability & GitOps | [README](session20-monitoring-observability-gitops/README.md) |
 | 21 | Final project (TaskBoard) | [README](session21-python/README.md) |
+| Capstone | **Kharcha**: my own app, end to end (CI/CD, DevSecOps, Helm, Terraform, monitoring, GitOps) | [README](final-devops-project/README.md) |
 
 Sessions 16 and 17 run as real pipelines on this repository:
 [Session 16 run](https://github.com/LAVYA255/devops-heros/actions/workflows/session16-cicd.yml)  and
-[Session 17 run](https://github.com/LAVYA255/devops-heros/actions/workflows/session17-devsecops.yml)
+[Session 17 run](https://github.com/LAVYA255/devops-heros/actions/workflows/session17-devsecops.yml), and the capstone's
+[Kharcha CI/CD](https://github.com/LAVYA255/devops-heros/actions/workflows/final-project.yml)
 
 Every task was executed on a real cluster or against real tooling, and each README contains
 the exact commands, the terminal output as it came back, and screenshots of that session.
