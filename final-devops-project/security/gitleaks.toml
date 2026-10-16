@@ -1,0 +1,21 @@
+# Gitleaks config: the default ruleset plus a short, explicit allowlist.
+#   gitleaks dir final-devops-project --config final-devops-project/security/gitleaks.toml
+title = "kharcha gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known non-secrets"
+paths = [
+  # Lock files are full of integrity hashes that look like high-entropy keys.
+  '''application/frontend/package-lock\.json''',
+  # Rendered screenshots are binary.
+  '''screenshots/''',
+]
+# The local-only Compose fallback password. It is a placeholder that exists so
+# `docker compose up` works on a fresh clone; real deployments get a generated
+# password from kubernetes/create-db-secret.sh.
+regexes = [
+  '''kharcha_local_dev_only''',
+]

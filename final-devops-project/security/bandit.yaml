@@ -1,0 +1,9 @@
+# Bandit config for the Kharcha backend.
+#   bandit -c security/bandit.yaml -r application/backend/app
+#
+# Tests are out of scope: they use assert on purpose (B101) and never ship in
+# the image. Nothing else is skipped. If a finding is a false positive, the
+# fix is an inline `# nosec <ID>` with a reason next to it, not a global skip.
+exclude_dirs:
+  - tests
+  - alembic/versions
