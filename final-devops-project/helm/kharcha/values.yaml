@@ -47,6 +47,9 @@ config:
   monthlyBudget: "20000"
 
 database:
+  # Empty means the bundled Postgres below. Set it to a managed database's
+  # endpoint (and postgres.enabled: false) to use that instead.
+  host: ""
   name: kharcha
   user: kharcha
   # Name of an EXISTING Secret holding the password under the key "password".

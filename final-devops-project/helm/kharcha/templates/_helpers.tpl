@@ -40,8 +40,9 @@ app.kubernetes.io/component: {{ .component }}
 {{- printf "%s/%s:%s" .Values.images.registry .Values.frontend.image (include "kharcha.tag" .) -}}
 {{- end -}}
 
+{{/* database.host if set (e.g. an RDS endpoint), otherwise the bundled Postgres Service. */}}
 {{- define "kharcha.dbHost" -}}
-{{- printf "%s-postgres" (include "kharcha.fullname" .) -}}
+{{- .Values.database.host | default (printf "%s-postgres" (include "kharcha.fullname" .)) -}}
 {{- end -}}
 
 {{/* Pod-level hardening shared by every workload. Satisfies the "restricted" Pod Security Standard. */}}
