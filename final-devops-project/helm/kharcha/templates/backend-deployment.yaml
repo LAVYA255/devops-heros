@@ -102,6 +102,15 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 3
+          # Kubernetes removes a terminating pod from the Service endpoints and
+          # sends it SIGTERM at the same time. Without this pause uvicorn closed
+          # its socket while kube-proxy was still routing to it: 5 of 450
+          # requests failed during one rolling restart (troubleshooting/README.md,
+          # scenario 6). The sleep keeps the pod serving until it is out.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "5"]
           securityContext:
             {{- include "kharcha.containerSecurity" . | nindent 12 }}
           resources:

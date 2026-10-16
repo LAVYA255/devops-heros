@@ -56,6 +56,12 @@ spec:
               path: /healthz
               port: http
             periodSeconds: 10
+          # Same race as the backend: keep serving while the pod is being taken
+          # out of the Service endpoints, then let nginx shut down gracefully.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "5"]
           securityContext:
             {{- include "kharcha.containerSecurity" . | nindent 12 }}
           resources:
