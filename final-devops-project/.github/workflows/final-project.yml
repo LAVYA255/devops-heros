@@ -1,0 +1,554 @@
+name: Final Project - Kharcha CI/CD
+
+# One pipeline for the capstone, from a commit to a running deployment:
+#
+#   test (backend, migrations, frontend)  ─┐
+#   scan (SAST, SCA, secrets, config)      ├─> build + image scan ─> SECURITY GATE
+#                                          ┘
+#   main only:  push to GHCR ─> deploy to kind + smoke test ─> GitOps bump
+#
+# The last step commits the new image tag to final-devops-project/gitops/,
+# and ArgoCD (watching that folder) rolls my Minikube cluster to it. CI never
+# talks to that cluster directly.
+#
+# A copy of this file lives at final-devops-project/.github/workflows/ so the
+# project folder is self-contained. GitHub only runs workflows from the repo
+# root, so this is the real one and the config-scan job fails if they differ.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'final-devops-project/**'
+      - '.github/workflows/final-project.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'final-devops-project/**'
+      - '.github/workflows/final-project.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never cancel a run half way through a deploy or a GitOps commit.
+concurrency:
+  group: final-project-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PROJECT_DIR: final-devops-project
+  BACKEND_DIR: final-devops-project/application/backend
+  FRONTEND_DIR: final-devops-project/application/frontend
+  REGISTRY: ghcr.io
+
+jobs:
+  # ============================================================ tests
+  backend-test:
+    name: Backend lint + unit tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ env.BACKEND_DIR }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: ${{ env.BACKEND_DIR }}/requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: flake8
+        run: flake8 app tests
+
+      - name: pytest with coverage (fails under 90%)
+        run: |
+          pytest -v --cov=app --cov-report=term-missing \
+            --cov-report=xml:coverage.xml --junitxml=junit.xml \
+            --cov-fail-under=90
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-test-reports
+          path: |
+            ${{ env.BACKEND_DIR }}/coverage.xml
+            ${{ env.BACKEND_DIR }}/junit.xml
+          retention-days: 14
+
+  # The unit tests build the schema with create_all() on SQLite, so they can
+  # never catch a broken migration. That is not hypothetical: the first
+  # version of alembic.ini could not import the app and the backend crash
+  # looped in Compose while every unit test was green. This job runs the real
+  # migrations against a real Postgres, both directions.
+  migration-test:
+    name: Migrations on real Postgres
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: kharcha
+          POSTGRES_USER: kharcha
+          POSTGRES_PASSWORD: ci-throwaway
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U kharcha -d kharcha"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://kharcha:ci-throwaway@localhost:5432/kharcha
+      PGPASSWORD: ci-throwaway
+    defaults:
+      run:
+        working-directory: ${{ env.BACKEND_DIR }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: ${{ env.BACKEND_DIR }}/requirements.txt
+
+      - name: Install runtime dependencies
+        run: pip install -r requirements.txt
+
+      - name: The entrypoint's migrate mode (what the init container runs)
+        run: sh entrypoint.sh migrate
+
+      - name: Schema is what the models expect
+        run: |
+          alembic current
+          psql -h localhost -U kharcha -d kharcha -c '\d expenses'
+
+      - name: The database itself rejects a non-positive amount
+        run: |
+          if psql -h localhost -U kharcha -d kharcha -v ON_ERROR_STOP=1 \
+               -c "insert into expenses (title, amount, category, spent_on) values ('bad', -1, 'food', '2026-10-01')"; then
+            echo "::error::CHECK (amount > 0) did not fire"; exit 1
+          fi
+          echo "CHECK constraint rejected the row, as it should"
+
+      - name: Downgrade to empty and upgrade again
+        run: |
+          alembic downgrade base
+          psql -h localhost -U kharcha -d kharcha -tAc "select count(*) from information_schema.tables where table_name='expenses'" | grep -qx 0
+          alembic upgrade head
+          alembic current
+
+      - name: App boots against the migrated database and serves a write
+        run: |
+          uvicorn app.main:app --port 8000 > uvicorn.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf -m 2 localhost:8000/ready && break; sleep 1; done
+          echo
+          curl -sf -m 5 -X POST localhost:8000/api/expenses \
+            -H 'Content-Type: application/json' \
+            -d '{"title":"CI smoke","amount":"42.50","category":"food","spent_on":"2026-10-01"}'
+          echo
+          curl -sf -m 5 'localhost:8000/api/expenses/summary?month=2026-10'
+          echo
+
+  frontend-build:
+    name: Frontend build + npm audit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ env.FRONTEND_DIR }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ${{ env.FRONTEND_DIR }}/package-lock.json
+
+      - name: npm ci
+        run: npm ci --no-fund
+
+      - name: npm audit (fails on high or critical)
+        run: npm audit --audit-level=high
+
+      - name: Build
+        run: npm run build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: ${{ env.FRONTEND_DIR }}/dist
+          retention-days: 7
+
+  # ============================================================ source scans
+  sast:
+    name: SAST (bandit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install 'bandit[toml]==1.8.6'
+      - name: bandit on the backend
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          bandit -c security/bandit.yaml -r application/backend/app application/backend/alembic/env.py \
+            -f json -o bandit-report.json || true
+          bandit -c security/bandit.yaml -r application/backend/app application/backend/alembic/env.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sast-bandit
+          path: ${{ env.PROJECT_DIR }}/bandit-report.json
+          retention-days: 14
+
+  sca:
+    name: SCA (pip-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pip-audit==2.9.0
+      - name: Known CVEs in the pinned Python dependencies
+        run: |
+          pip-audit -r ${{ env.BACKEND_DIR }}/requirements.txt -f json -o pip-audit-report.json || true
+          pip-audit -r ${{ env.BACKEND_DIR }}/requirements.txt --desc
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sca-pip-audit
+          path: pip-audit-report.json
+          retention-days: 14
+
+  secret-scan:
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      # Full history: a secret committed and then deleted is still leaked.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Working tree
+        run: |
+          docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:v8.30.1 \
+            dir /repo/${{ env.PROJECT_DIR }} \
+            --config /repo/${{ env.PROJECT_DIR }}/security/gitleaks.toml \
+            --redact --verbose --no-banner
+      - name: Every commit that touched the project
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo zricethezav/gitleaks:v8.30.1 \
+            git /repo \
+            --config /repo/${{ env.PROJECT_DIR }}/security/gitleaks.toml \
+            --log-opts="-- ${{ env.PROJECT_DIR }}" \
+            --redact --verbose --no-banner
+
+  config-scan:
+    name: Helm lint + IaC misconfig scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The project's copy of this workflow is identical
+        run: diff -u .github/workflows/final-project.yml ${{ env.PROJECT_DIR }}/.github/workflows/final-project.yml
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+
+      - name: helm lint (chart defaults and the Minikube values)
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          helm lint helm/kharcha --set images.tag=ci
+          helm lint helm/kharcha -f gitops/values-minikube.yaml
+
+      - name: The chart refuses the latest tag
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          if helm template x helm/kharcha --set images.tag=latest > /dev/null 2>err.txt; then
+            echo "::error::chart rendered with images.tag=latest"; exit 1
+          fi
+          cat err.txt
+
+      - name: trivy config (Helm chart, Dockerfiles, manifests, Terraform)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: config
+          scan-ref: ${{ env.PROJECT_DIR }}
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+
+  # ============================================================ build + image scan
+  build-scan:
+    name: Build + scan ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    needs: [backend-test, migration-test, frontend-build]
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [backend, frontend]
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # The tag is the short commit SHA. Never "latest": a tag that moves
+      # cannot be rolled back to, and the chart refuses it anyway.
+      - name: Image name and tag
+        id: meta
+        run: |
+          OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          TAG=${GITHUB_SHA::7}
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "image=${REGISTRY}/${OWNER}/kharcha-${{ matrix.service }}:${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.PROJECT_DIR }}/application/${{ matrix.service }}
+          load: true
+          push: false
+          pull: true
+          tags: ${{ steps.meta.outputs.image }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+      - name: Image size and user
+        run: |
+          docker images "${{ steps.meta.outputs.image }}" --format '{{.Repository}}:{{.Tag}}  {{.Size}}'
+          echo "runs as: $(docker inspect -f '{{.Config.User}}' "${{ steps.meta.outputs.image }}")"
+
+      - name: Trivy report (every severity, for the record)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ steps.meta.outputs.image }}
+          scanners: vuln,secret
+          format: table
+          output: trivy-${{ matrix.service }}.txt
+
+      - name: Trivy gate (fixable HIGH or CRITICAL fails the build)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ steps.meta.outputs.image }}
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+          format: table
+
+      # The exact bytes that were scanned are what gets pushed. Rebuilding in
+      # the publish job could pull a newer base layer that nobody scanned.
+      - name: Save the scanned image
+        run: docker save "${{ steps.meta.outputs.image }}" | gzip > kharcha-${{ matrix.service }}.tar.gz
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-${{ matrix.service }}
+          path: trivy-${{ matrix.service }}.txt
+          retention-days: 14
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: image-${{ matrix.service }}
+          path: kharcha-${{ matrix.service }}.tar.gz
+          retention-days: 3
+
+  # ============================================================ the gate
+  security-gate:
+    name: Security gate
+    runs-on: ubuntu-latest
+    needs: [sast, sca, secret-scan, config-scan, build-scan]
+    if: always()
+    steps:
+      - name: Every stage must be green
+        run: |
+          {
+            echo "### Security gate"
+            echo ""
+            echo "| Stage | Tool | Result |"
+            echo "| --- | --- | --- |"
+            echo "| SAST | bandit | ${{ needs.sast.result }} |"
+            echo "| SCA | pip-audit + npm audit | ${{ needs.sca.result }} |"
+            echo "| Secrets | gitleaks | ${{ needs.secret-scan.result }} |"
+            echo "| IaC / config | helm lint + trivy config | ${{ needs.config-scan.result }} |"
+            echo "| Images | trivy | ${{ needs.build-scan.result }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for r in "${{ needs.sast.result }}" "${{ needs.sca.result }}" "${{ needs.secret-scan.result }}" \
+                   "${{ needs.config-scan.result }}" "${{ needs.build-scan.result }}"; do
+            if [ "$r" != "success" ]; then
+              echo "**Gate: BLOCKED**" >> "$GITHUB_STEP_SUMMARY"
+              echo "::error::Security gate failed, nothing will be pushed or deployed"
+              exit 1
+            fi
+          done
+          echo "**Gate: PASSED**" >> "$GITHUB_STEP_SUMMARY"
+          echo "Security gate passed"
+
+  # ============================================================ CD (main only)
+  publish:
+    name: Push ${{ matrix.service }} to GHCR
+    runs-on: ubuntu-latest
+    needs: [build-scan, security-gate]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        service: [backend, frontend]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: image-${{ matrix.service }}
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Load and push the scanned image
+        run: |
+          IMAGE=$(gunzip -c kharcha-${{ matrix.service }}.tar.gz | docker load | sed -n 's/^Loaded image: //p')
+          echo "pushing $IMAGE"
+          docker push "$IMAGE"
+
+  deploy-kind:
+    name: Deploy to kind + smoke test
+    runs-on: ubuntu-latest
+    needs: [build-scan, publish]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      packages: read
+    env:
+      TAG: ${{ needs.build-scan.outputs.tag }}
+    defaults:
+      run:
+        working-directory: ${{ env.PROJECT_DIR }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: kharcha-ci
+          config: ${{ env.PROJECT_DIR }}/kubernetes/kind-ci.yaml
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.4
+
+      - name: Install ingress-nginx (same version as my Minikube)
+        run: |
+          kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.15.1/deploy/static/provider/kind/deploy.yaml
+          kubectl wait -n ingress-nginx --for=condition=Available deployment/ingress-nginx-controller --timeout=180s
+          bash kubernetes/tune-ingress-nginx.sh 4
+
+      - name: Namespace, guardrails, database secret
+        run: |
+          kubectl apply -f kubernetes/namespace.yaml
+          kubectl apply -f kubernetes/resource-guardrails.yaml
+          bash kubernetes/create-db-secret.sh kharcha
+
+      # The packages are private, so the cluster pulls them with this run's
+      # short-lived token. It expires when the job ends.
+      - name: GHCR pull secret
+        run: |
+          kubectl create secret docker-registry ghcr-pull -n kharcha \
+            --docker-server=ghcr.io \
+            --docker-username="${{ github.actor }}" \
+            --docker-password="${{ secrets.GITHUB_TOKEN }}"
+
+      - name: helm upgrade --install
+        run: |
+          helm upgrade --install kharcha helm/kharcha -n kharcha \
+            -f gitops/values-minikube.yaml \
+            --set images.tag="$TAG" \
+            --set 'imagePullSecrets[0].name=ghcr-pull' \
+            --wait --timeout 6m
+
+      - name: State
+        if: always()
+        run: |
+          kubectl get pods,svc,ingress,hpa,pdb -n kharcha -o wide
+          helm list -n kharcha
+
+      - name: Smoke test through the Ingress
+        run: |
+          H='Host: kharcha.local'
+          for i in $(seq 1 30); do curl -sf -m 3 -H "$H" http://localhost/health && break; sleep 2; done
+          echo
+          curl -sf -m 5 -H "$H" http://localhost/ | grep -o '<title>.*</title>'
+          curl -sf -m 5 -H "$H" -X POST http://localhost/api/expenses \
+            -H 'Content-Type: application/json' \
+            -d '{"title":"Deployed by CI","amount":"99.00","category":"other","spent_on":"2026-10-01"}'
+          echo
+          curl -sf -m 5 -H "$H" 'http://localhost/api/expenses/summary?month=2026-10'
+          echo
+          VERSION=$(curl -sf -m 5 -H "$H" http://localhost/health | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])')
+          echo "deployed version: $VERSION"
+          [ "$VERSION" = "$TAG" ] || { echo "::error::expected $TAG, got $VERSION"; exit 1; }
+
+      - name: helm test
+        run: helm test kharcha -n kharcha --logs
+
+      - name: Dump state on failure
+        if: failure()
+        run: |
+          kubectl get events -n kharcha --sort-by=.lastTimestamp | tail -40
+          kubectl describe pods -n kharcha | tail -80
+          kubectl logs -n kharcha -l app.kubernetes.io/component=backend --all-containers --tail=50 || true
+
+  # The GitOps hand-off. CI's last act is a commit, not a kubectl command:
+  # ArgoCD sees the new tag in gitops/values-minikube.yaml and syncs.
+  # Pushes made with GITHUB_TOKEN do not trigger workflows, so this cannot loop.
+  gitops-bump:
+    name: GitOps - bump image tag
+    runs-on: ubuntu-latest
+    needs: [build-scan, deploy-kind]
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.build-scan.outputs.tag }}
+      VALUES: final-devops-project/gitops/values-minikube.yaml
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Write the new tag and push
+        run: |
+          CURRENT=$(sed -n 's/^  tag: "\(.*\)"/\1/p' "$VALUES")
+          echo "current tag: $CURRENT, this run: $TAG"
+          if [ "$CURRENT" = "$TAG" ]; then
+            echo "already at $TAG, nothing to do"; exit 0
+          fi
+          # A slow older run must not roll the environment back over a newer one.
+          if git cat-file -e "$CURRENT^{commit}" 2>/dev/null && ! git merge-base --is-ancestor "$CURRENT" "$GITHUB_SHA"; then
+            echo "$CURRENT is newer than $TAG, leaving it"; exit 0
+          fi
+          sed -i "s/^  tag: \".*\"/  tag: \"$TAG\"/" "$VALUES"
+          git diff
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "GitOps: deploy kharcha $TAG [skip ci]"
+          for i in 1 2 3; do
+            git push origin HEAD:main && break
+            git pull --rebase origin main
+          done
+          {
+            echo "### GitOps"
+            echo "Committed image tag \`$TAG\` to \`$VALUES\`. ArgoCD will sync it."
+          } >> "$GITHUB_STEP_SUMMARY"

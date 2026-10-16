@@ -1,0 +1,18 @@
+# The throwaway cluster the pipeline deploys to (helm/kind-action).
+# Port 80 on the runner maps into the node, and the node is labelled the way
+# ingress-nginx's kind manifest expects, so the smoke test goes through a real
+# Ingress exactly like it does on Minikube.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    extraPortMappings:
+      - containerPort: 80
+        hostPort: 80
+        protocol: TCP
