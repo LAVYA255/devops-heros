@@ -40,9 +40,23 @@ app.kubernetes.io/component: {{ .component }}
 {{- printf "%s/%s:%s" .Values.images.registry .Values.frontend.image (include "kharcha.tag" .) -}}
 {{- end -}}
 
-{{/* database.host if set (e.g. an RDS endpoint), otherwise the bundled Postgres Service. */}}
+{{/*
+Name of the bundled Postgres StatefulSet and Services. Fixed, and deliberately
+NOT derived from database.host: when it was, a typo in database.host renamed
+the bundled database, Helm created a second, empty Postgres under the typo'd
+name, migrations ran on it and the app switched over with every probe green.
+Found by breaking things on purpose in the troubleshooting lab.
+*/}}
+{{- define "kharcha.postgresName" -}}
+{{- printf "%s-postgres" (include "kharcha.fullname" .) -}}
+{{- end -}}
+
+{{/* Where the app connects: database.host (e.g. an RDS endpoint) or the bundled Postgres. */}}
 {{- define "kharcha.dbHost" -}}
-{{- .Values.database.host | default (printf "%s-postgres" (include "kharcha.fullname" .)) -}}
+{{- if and .Values.postgres.enabled .Values.database.host -}}
+{{- fail "database.host is set while postgres.enabled=true. Use one or the other: set postgres.enabled=false to use an external database." -}}
+{{- end -}}
+{{- .Values.database.host | default (include "kharcha.postgresName" .) -}}
 {{- end -}}
 
 {{/* Pod-level hardening shared by every workload. Satisfies the "restricted" Pod Security Standard. */}}

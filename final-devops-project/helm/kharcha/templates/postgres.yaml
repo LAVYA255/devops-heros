@@ -1,5 +1,5 @@
 {{- if .Values.postgres.enabled }}
-{{- $name := include "kharcha.dbHost" . -}}
+{{- $name := include "kharcha.postgresName" . -}}
 # Headless Service: gives the StatefulSet pod its stable DNS identity
 # (kharcha-postgres-0.kharcha-postgres-headless). Required by serviceName below.
 apiVersion: v1

@@ -47,8 +47,9 @@ config:
   monthlyBudget: "20000"
 
 database:
-  # Empty means the bundled Postgres below. Set it to a managed database's
-  # endpoint (and postgres.enabled: false) to use that instead.
+  # Empty means the bundled Postgres below. To use a managed database, set
+  # this to its endpoint AND postgres.enabled: false. Setting both is refused
+  # at render time (see kharcha.dbHost in _helpers.tpl for why).
   host: ""
   name: kharcha
   user: kharcha
