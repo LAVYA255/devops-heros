@@ -1,0 +1,15 @@
+# Environment values for the local Minikube cluster, layered on top of the
+# chart's values.yaml. This is the file the GitOps loop changes: CI writes the
+# new image tag here and commits it, and ArgoCD rolls the cluster to match.
+
+images:
+  registry: ghcr.io/lavya255
+  # Set by CI to the commit SHA it just built, scanned and pushed.
+  tag: "81a353a"
+  pullPolicy: IfNotPresent
+
+ingress:
+  host: kharcha.local
+
+config:
+  monthlyBudget: "20000"

@@ -1,0 +1,52 @@
+{{- if .Values.backend.autoscaling.enabled }}
+# Scales the backend on CPU. The Deployment deliberately has no `replicas` field
+# when this is enabled: if both set a count, every `helm upgrade` would reset the
+# replicas to the chart value and fight whatever the HPA had scaled to.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "kharcha.fullname" . }}-backend
+  labels:
+    {{- include "kharcha.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "kharcha.fullname" . }}-backend
+  minReplicas: {{ .Values.backend.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.backend.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.backend.autoscaling.targetCPUUtilizationPercentage }}
+{{- end }}
+---
+# Voluntary disruptions (node drains, cluster upgrades) may never take the
+# last replica of either tier down at once.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "kharcha.fullname" . }}-backend
+  labels:
+    {{- include "kharcha.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "kharcha.selector" (dict "root" . "component" "backend") | nindent 6 }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "kharcha.fullname" . }}-frontend
+  labels:
+    {{- include "kharcha.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "kharcha.selector" (dict "root" . "component" "frontend") | nindent 6 }}

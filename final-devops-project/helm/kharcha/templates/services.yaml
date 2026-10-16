@@ -1,0 +1,33 @@
+# ClusterIP Services for the backend and frontend. Nothing here is exposed
+# outside the cluster directly; the Ingress is the single way in.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kharcha.fullname" . }}-backend
+  labels:
+    {{- include "kharcha.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "kharcha.selector" (dict "root" . "component" "backend") | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.backend.port }}
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kharcha.fullname" . }}-frontend
+  labels:
+    {{- include "kharcha.labels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "kharcha.selector" (dict "root" . "component" "frontend") | nindent 4 }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

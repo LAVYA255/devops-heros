@@ -1,0 +1,36 @@
+# Guardrails for the namespace, applied once before the app.
+
+# A ceiling on what the whole namespace may request. Stops a bad HPA setting or
+# a runaway deployment from eating the cluster.
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: kharcha-quota
+  namespace: kharcha
+spec:
+  hard:
+    requests.cpu: "4"
+    requests.memory: 4Gi
+    limits.cpu: "8"
+    limits.memory: 8Gi
+    pods: "40"
+    persistentvolumeclaims: "4"
+---
+# Defaults for any container that forgets to set requests and limits. With a
+# ResourceQuota in place, a pod with no requests would otherwise be REJECTED,
+# so this keeps a stray manifest from failing in a confusing way. It also means
+# the HPA always has a CPU request to compute utilisation against.
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: kharcha-defaults
+  namespace: kharcha
+spec:
+  limits:
+    - type: Container
+      defaultRequest:
+        cpu: 50m
+        memory: 64Mi
+      default:
+        cpu: 500m
+        memory: 256Mi

@@ -1,0 +1,48 @@
+# `helm test kharcha -n kharcha` runs this pod once and reports pass/fail.
+# It checks the whole path from inside the cluster: backend readiness (which
+# means the database is reachable), the frontend, and an API call through the
+# frontend's nginx proxy.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "kharcha.fullname" . }}-test
+  labels:
+    {{- include "kharcha.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 100
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: smoke
+      image: curlimages/curl:8.5.0
+      command:
+        - sh
+        - -c
+        - |
+          set -e
+          B=http://{{ include "kharcha.fullname" . }}-backend:{{ .Values.backend.port }}
+          F=http://{{ include "kharcha.fullname" . }}-frontend
+          echo "backend /ready";            curl -fsS $B/ready; echo
+          echo "backend /api/categories";   curl -fsS $B/api/categories; echo
+          echo "frontend /healthz";         curl -fsS $F/healthz
+          echo "api via frontend nginx";    curl -fsS -o /dev/null -w "%{http_code}\n" $F/api/expenses
+          echo "all checks passed"
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      resources:
+        requests:
+          cpu: 10m
+          memory: 16Mi
+        limits:
+          cpu: 100m
+          memory: 32Mi

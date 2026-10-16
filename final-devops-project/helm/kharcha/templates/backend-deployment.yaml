@@ -1,0 +1,115 @@
+{{- $name := printf "%s-backend" (include "kharcha.fullname" .) -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kharcha.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backend
+spec:
+  {{- if not .Values.backend.autoscaling.enabled }}
+  replicas: {{ .Values.backend.replicas }}
+  {{- end }}
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      {{- include "kharcha.selector" (dict "root" . "component" "backend") | nindent 6 }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Never drop below the desired count during a rollout.
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        {{- include "kharcha.selector" (dict "root" . "component" "backend") | nindent 8 }}
+        app.kubernetes.io/version: {{ include "kharcha.tag" . | quote }}
+      annotations:
+        # Env vars are read once at container start, so a ConfigMap change does
+        # nothing to running pods (Sessions 12 and 20). Hashing the ConfigMap
+        # into the pod template makes a config change roll the pods.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if .Values.metrics.scrape }}
+        prometheus.io/scrape: "true"
+        prometheus.io/port: {{ .Values.backend.port | quote }}
+        prometheus.io/path: /metrics
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "kharcha.fullname" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "kharcha.podSecurity" . | nindent 8 }}
+        runAsUser: 10001
+        runAsGroup: 10001
+      initContainers:
+        # Waits for Postgres, then runs `alembic upgrade head`. Every replica
+        # does this, but alembic/env.py holds a Postgres advisory lock while it
+        # migrates, so concurrent pods queue instead of racing.
+        - name: migrate
+          image: {{ include "kharcha.backendImage" . }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          args: ["migrate"]
+          env:
+            {{- include "kharcha.dbEnv" . | nindent 12 }}
+          securityContext:
+            {{- include "kharcha.containerSecurity" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.backend.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      containers:
+        - name: api
+          image: {{ include "kharcha.backendImage" . }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.backend.port }}
+          env:
+            {{- include "kharcha.dbEnv" . | nindent 12 }}
+            - name: RUN_MIGRATIONS
+              value: "false"
+          envFrom:
+            - configMapRef:
+                name: {{ include "kharcha.fullname" . }}-config
+          # startupProbe holds off liveness until the app is up, so a slow
+          # first start is not mistaken for a hang and killed.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+          # Readiness checks the database: no DB, no traffic.
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # Liveness does NOT check the database. A DB outage should take pods
+          # out of the Service, not restart every one of them.
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          securityContext:
+            {{- include "kharcha.containerSecurity" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.backend.resources | nindent 12 }}
+          volumeMounts:
+            # readOnlyRootFilesystem means anything that writes needs its own mount.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

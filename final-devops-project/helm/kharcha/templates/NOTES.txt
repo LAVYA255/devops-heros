@@ -1,0 +1,16 @@
+Kharcha {{ include "kharcha.tag" . }} is deploying to namespace {{ .Release.Namespace }}.
+
+  backend image : {{ include "kharcha.backendImage" . }}
+  frontend image: {{ include "kharcha.frontendImage" . }}
+
+Watch it come up:
+  kubectl get pods -n {{ .Release.Namespace }} -w
+
+Run the in-cluster smoke test:
+  helm test {{ .Release.Name }} -n {{ .Release.Namespace }}
+{{- if .Values.ingress.enabled }}
+
+Open it:
+  add "<ingress IP>  {{ .Values.ingress.host }}" to your hosts file, then
+  http://{{ .Values.ingress.host }}/
+{{- end }}

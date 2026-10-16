@@ -1,0 +1,17 @@
+# The namespace Kharcha runs in.
+#
+# The pod-security labels make the API server ENFORCE the "restricted" Pod
+# Security Standard here: any pod that runs as root, allows privilege
+# escalation, keeps Linux capabilities or skips a seccomp profile is rejected
+# at admission time, before it is ever scheduled. Every workload in the Helm
+# chart is written to pass it.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kharcha
+  labels:
+    app.kubernetes.io/part-of: kharcha
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted

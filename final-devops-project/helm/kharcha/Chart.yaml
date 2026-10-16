@@ -1,0 +1,15 @@
+apiVersion: v2
+name: kharcha
+description: Kharcha personal expense tracker - FastAPI backend, React frontend, PostgreSQL
+type: application
+# Chart version: bump when the chart itself changes.
+version: 1.0.0
+# App version: the default image tag. CI overrides images.tag with the git SHA.
+appVersion: "1.0.0"
+keywords:
+  - fastapi
+  - react
+  - postgresql
+maintainers:
+  - name: Lavya
+    url: https://github.com/LAVYA255
