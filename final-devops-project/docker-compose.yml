@@ -1,0 +1,59 @@
+# Kharcha - full local stack: frontend, backend, PostgreSQL.
+#
+#   docker compose up --build
+#   open http://localhost:3000
+#
+# The database password falls back to a local-only default so the command above
+# works with no setup. For anything shared, copy .env.example to .env and set a
+# real one. In Kubernetes the password comes from a Secret instead.
+name: kharcha
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: kharcha
+      POSTGRES_USER: kharcha
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kharcha_local_dev_only}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # A real readiness check, so the backend waits for Postgres to accept
+    # connections rather than just for the container to exist.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kharcha -d kharcha"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  backend:
+    build: ./application/backend
+    environment:
+      DATABASE_URL: postgresql+psycopg://kharcha:${POSTGRES_PASSWORD:-kharcha_local_dev_only}@postgres:5432/kharcha
+      # Only one backend container here, so it is safe for it to run migrations
+      # itself. Kubernetes uses a one-off Job instead (see helm/).
+      RUN_MIGRATIONS: "true"
+      APP_VERSION: ${APP_VERSION:-compose}
+      MONTHLY_BUDGET: ${MONTHLY_BUDGET:-20000}
+      CURRENCY: INR
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  frontend:
+    build: ./application/frontend
+    environment:
+      BACKEND_UPSTREAM: http://backend:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      # nginx runs unprivileged on 8080 inside the container.
+      - "3000:8080"
+    restart: unless-stopped
+
+volumes:
+  pgdata:

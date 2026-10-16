@@ -1,0 +1,71 @@
+# Rendered at container start by the nginx image's envsubst step.
+#   BACKEND_UPSTREAM       where /api goes, e.g. http://backend:8000
+#   NGINX_LOCAL_RESOLVERS  filled in automatically from /etc/resolv.conf
+#                          (needs NGINX_ENTRYPOINT_LOCAL_RESOLVERS=1)
+#
+# Why the resolver + variable dance: a plain `proxy_pass http://backend:8000`
+# makes nginx resolve "backend" ONCE at startup and exit if it cannot. If the
+# frontend starts before the backend, the whole container dies with
+#   [emerg] host not found in upstream "backend"
+# Putting the upstream in a variable makes nginx resolve it per request instead,
+# so start order no longer matters. In Kubernetes the resolver does not apply the
+# search domains from resolv.conf, which is why the Helm chart passes a fully
+# qualified service name.
+
+server {
+    listen 8080;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    resolver ${NGINX_LOCAL_RESOLVERS} valid=10s ipv6=off;
+
+    server_tokens off;
+    include /etc/nginx/snippets/security-headers.conf;
+
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+    gzip_min_length 1024;
+
+    # The frontend's own probe target. Answers even if the backend is down, so a
+    # backend outage does not also get the frontend pods restarted.
+    location = /healthz {
+        access_log off;
+        default_type text/plain;
+        return 200 "ok\n";
+    }
+
+    location /api/ {
+        set $backend ${BACKEND_UPSTREAM};
+        proxy_pass $backend;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 30s;
+    }
+
+    location = /health {
+        set $backend ${BACKEND_UPSTREAM};
+        proxy_pass $backend;
+    }
+
+    # Vite puts content hashes in asset filenames, so they can be cached forever.
+    location /assets/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        include /etc/nginx/snippets/security-headers.conf;
+        try_files $uri =404;
+    }
+
+    # Single page app: unknown paths serve index.html. index.html itself is never
+    # cached, so a new deploy is picked up on the next page load.
+    location / {
+        add_header Cache-Control "no-cache";
+        include /etc/nginx/snippets/security-headers.conf;
+        try_files $uri $uri/ /index.html;
+    }
+}

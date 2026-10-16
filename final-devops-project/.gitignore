@@ -1,0 +1,36 @@
+# secrets and local config
+.env
+*.env.local
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.coverage
+coverage.xml
+test-results/
+
+# node
+node_modules/
+dist/
+.vite/
+npm-debug.log*
+
+# terraform: state holds every attribute of every resource in plain text
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+tfplan
+crash.log
+
+# helm
+helm/kharcha/charts/
+*.tgz
+
+# editors and OS
+.idea/
+.vscode/
+.DS_Store

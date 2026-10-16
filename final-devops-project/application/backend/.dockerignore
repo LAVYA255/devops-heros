@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+coverage.xml
+test-results/
+tests/
+.venv/
+.env
+.flake8
+pytest.ini
+requirements-dev.txt
