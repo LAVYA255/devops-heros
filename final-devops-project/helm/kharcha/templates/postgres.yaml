@@ -85,12 +85,21 @@ spec:
             exec:
               command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
             periodSeconds: 5
+            timeoutSeconds: 3
             failureThreshold: 6
+          # Liveness must only fire when Postgres is truly stuck, never because
+          # it is busy. With the default 1s timeout and 3 failures, a load test
+          # that pushed Postgres to its CPU limit made pg_isready slow, the
+          # kubelet restarted the database mid-load, and every backend pod lost
+          # its connections at once (troubleshooting/README.md, scenario 11).
+          # Now it takes a full minute of no answer before a restart.
           livenessProbe:
             exec:
               command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\""]
             initialDelaySeconds: 30
             periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
           securityContext:
             allowPrivilegeEscalation: false
             # Postgres must write to /var/run/postgresql and its data dir; both

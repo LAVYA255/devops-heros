@@ -66,12 +66,16 @@ postgres:
   storage: 1Gi
   # "" uses the cluster's default StorageClass.
   storageClass: ""
+  # Sized for the backend at its HPA maximum (6 pods), measured under
+  # scripts/load-test.sh: with a 500m limit Postgres sat at exactly 0.5 cores,
+  # throttled, while six API pods waited on it. One database serves every
+  # replica, so it gets a real request and room to burst.
   resources:
     requests:
-      cpu: 50m
+      cpu: 250m
       memory: 128Mi
     limits:
-      cpu: 500m
+      cpu: 1500m
       memory: 512Mi
 
 ingress:

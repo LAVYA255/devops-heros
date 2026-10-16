@@ -12,7 +12,18 @@ class Base(DeclarativeBase):
 # Without it, the first request after Postgres restarts fails with a stale
 # connection error, which in Kubernetes shows up as a burst of 500s every time
 # the database pod is rescheduled.
-engine = create_engine(settings.database_url, pool_pre_ping=True)
+#
+# Pool size is set on purpose rather than left at SQLAlchemy's 5 + 10 overflow.
+# The HPA can run 6 backend pods; 6 x 15 = 90 connections against Postgres's
+# max_connections of 100 leaves almost nothing for migrations or a psql
+# session. 5 + 5 per pod caps the fleet at 60. pool_timeout makes a request
+# that cannot get a connection fail after 10s instead of hanging for 30.
+_pool_args = (
+    {"pool_size": 5, "max_overflow": 5, "pool_timeout": 10}
+    if settings.database_url.startswith("postgresql")
+    else {}
+)
+engine = create_engine(settings.database_url, pool_pre_ping=True, **_pool_args)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 
