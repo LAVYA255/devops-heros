@@ -31,7 +31,8 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://kharcha:${POSTGRES_PASSWORD:-kharcha_local_dev_only}@postgres:5432/kharcha
       # Only one backend container here, so it is safe for it to run migrations
-      # itself. Kubernetes uses a one-off Job instead (see helm/).
+      # itself. In Kubernetes an init container runs them before each pod starts,
+      # under a Postgres advisory lock so several pods cannot race (see helm/).
       RUN_MIGRATIONS: "true"
       APP_VERSION: ${APP_VERSION:-compose}
       MONTHLY_BUDGET: ${MONTHLY_BUDGET:-20000}

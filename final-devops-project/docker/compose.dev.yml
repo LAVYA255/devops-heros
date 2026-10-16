@@ -1,0 +1,20 @@
+# Development override: edit Python on the host, the API reloads by itself.
+#
+#   docker compose -f docker-compose.yml -f docker/compose.dev.yml up --build
+#
+# Compose merges this on top of the main file. Only the backend changes:
+# the source folder is mounted over the copy baked into the image, and
+# uvicorn runs with --reload. The production image is untouched, which is the
+# point of keeping this in a separate file.
+services:
+  backend:
+    # The image's entrypoint starts uvicorn without --reload, so it is replaced:
+    # migrate, then uvicorn in reload mode. Postgres is already healthy thanks
+    # to depends_on in the main file.
+    entrypoint: ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir app"]
+    environment:
+      APP_VERSION: dev-reload
+    volumes:
+      # Relative to the FIRST compose file (the project root), not to this one.
+      # Read-only: the container may read the code, never write to your checkout.
+      - ./application/backend/app:/app/app:ro
