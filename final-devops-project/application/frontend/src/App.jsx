@@ -16,6 +16,16 @@ const CATEGORY_META = {
 const thisMonth = () => new Date().toISOString().slice(0, 7);
 const today = () => new Date().toISOString().slice(0, 10);
 
+// Days of `month` that have already happened: every day of a past month, up
+// to today for the current one, none for a future one. Used for the daily pace.
+function daysElapsed(month) {
+  const current = thisMonth();
+  if (month > current) return 0;
+  if (month === current) return Number(today().slice(8, 10));
+  const [y, m] = month.split("-").map(Number);
+  return new Date(Date.UTC(y, m, 0)).getUTCDate(); // day 0 of next month = last day of this one
+}
+
 function money(value, currency = "INR") {
   return new Intl.NumberFormat("en-IN", {
     style: "currency",
@@ -150,7 +160,11 @@ export default function App() {
         <div className="card">
           <span className="card-label">Spent this month</span>
           <strong className="card-value">{money(summary?.total, currency)}</strong>
-          <span className="card-sub">{summary?.count ?? 0} expenses</span>
+          <span className="card-sub">
+            {summary?.count ?? 0} expenses
+            {summary && daysElapsed(month) > 0 &&
+              ` · ${money(Number(summary.total) / daysElapsed(month), currency)} per day so far`}
+          </span>
         </div>
         <div className="card">
           <span className="card-label">Monthly budget</span>

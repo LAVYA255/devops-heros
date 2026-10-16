@@ -115,13 +115,20 @@ spec:
   # One PersistentVolumeClaim per replica, created from this template. It is
   # NOT deleted when the StatefulSet or the Helm release is deleted, on purpose:
   # uninstalling the app should not silently destroy the data.
+  # apiVersion, kind and volumeMode are written out even though they are the
+  # defaults: the API server stores them on the live object, and without them
+  # ArgoCD showed this StatefulSet as OutOfSync forever. VCTs are immutable,
+  # so the rendered template has to match what Kubernetes keeps, field for field.
   volumeClaimTemplates:
-    - metadata:
+    - apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
         name: data
         labels:
           {{- include "kharcha.selector" (dict "root" . "component" "database") | nindent 10 }}
       spec:
         accessModes: ["ReadWriteOnce"]
+        volumeMode: Filesystem
         {{- if .Values.postgres.storageClass }}
         storageClassName: {{ .Values.postgres.storageClass | quote }}
         {{- end }}
