@@ -1,0 +1,64 @@
+# The one object that connects my cluster to this repo.
+#
+#   kubectl apply -f final-devops-project/gitops/argocd-application.yaml
+#
+# ArgoCD renders the Helm chart from git with values-minikube.yaml layered on
+# top, and keeps the kharcha namespace matching it. CI never runs kubectl
+# against this cluster: its last job commits a new image tag to
+# values-minikube.yaml, and this Application notices and rolls the change out.
+#
+# It is applied once by hand and lives outside the chart, so ArgoCD is not
+# managing its own definition.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kharcha
+  namespace: argocd
+  # Deleting the Application deletes what it deployed, instead of orphaning it.
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/LAVYA255/devops-heros.git
+    targetRevision: main
+    path: final-devops-project/helm/kharcha
+    helm:
+      releaseName: kharcha
+      # Relative to the chart directory. Same repo, so ArgoCD allows it.
+      valueFiles:
+        - ../../gitops/values-minikube.yaml
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kharcha
+
+  syncPolicy:
+    automated:
+      prune: true     # something removed from git is removed from the cluster
+      selfHeal: true  # a manual kubectl edit is reverted to what git says
+    syncOptions:
+      # The namespace is bootstrapped separately (Pod Security labels, quota,
+      # the generated DB secret), so ArgoCD must not create a bare one.
+      - CreateNamespace=false
+      # Apply server-side so the HPA-managed replica count and the fields
+      # other controllers own are never fought over.
+      - ServerSideApply=true
+      # Honour ignoreDifferences during sync too, not only in the diff view.
+      - RespectIgnoreDifferences=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m
+
+  # The HPA owns the backend's replica count. The chart already leaves
+  # spec.replicas out when autoscaling is on; this is the belt to that brace.
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      name: kharcha-backend
+      jsonPointers:
+        - /spec/replicas
