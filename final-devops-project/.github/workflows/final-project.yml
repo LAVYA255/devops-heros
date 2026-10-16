@@ -454,6 +454,21 @@ jobs:
           kubectl wait -n ingress-nginx --for=condition=Available deployment/ingress-nginx-controller --timeout=180s
           bash kubernetes/tune-ingress-nginx.sh 4
 
+      # "Available" is not enough. The tune script restarts the controller, and
+      # one run failed with 'failed calling webhook validate.nginx.ingress...'
+      # because helm got to the admission webhook before the new pod served it.
+      # Wait until the webhook actually answers a server-side dry run.
+      - name: Wait for the ingress admission webhook
+        run: |
+          for i in $(seq 1 30); do
+            if kubectl create ingress webhook-probe -n default --class=nginx \
+                 --rule='probe.local/*=probe:80' --dry-run=server -o name >/dev/null 2>err.txt; then
+              echo "admission webhook answering after $i attempt(s)"; exit 0
+            fi
+            sleep 3
+          done
+          cat err.txt; exit 1
+
       - name: Namespace, guardrails, database secret
         run: |
           kubectl apply -f kubernetes/namespace.yaml
