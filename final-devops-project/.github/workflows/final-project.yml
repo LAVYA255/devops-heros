@@ -14,16 +14,23 @@ name: Final Project - Kharcha CI/CD
 # A copy of this file lives at final-devops-project/.github/workflows/ so the
 # project folder is self-contained. GitHub only runs workflows from the repo
 # root, so this is the real one and the config-scan job fails if they differ.
+# Docs and screenshots do not change what ships, so they do not build,
+# scan and deploy a new image. Order matters: the "!" lines exclude
+# from the line above them.
 on:
   push:
     branches: [main]
     paths:
       - 'final-devops-project/**'
+      - '!final-devops-project/**/*.md'
+      - '!final-devops-project/screenshots/**'
       - '.github/workflows/final-project.yml'
   pull_request:
     branches: [main]
     paths:
       - 'final-devops-project/**'
+      - '!final-devops-project/**/*.md'
+      - '!final-devops-project/screenshots/**'
       - '.github/workflows/final-project.yml'
   workflow_dispatch:
 
