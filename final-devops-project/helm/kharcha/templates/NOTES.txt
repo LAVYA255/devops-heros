@@ -13,4 +13,7 @@ Run the in-cluster smoke test:
 Open it:
   add "<ingress IP>  {{ .Values.ingress.host }}" to your hosts file, then
   http://{{ .Values.ingress.host }}/
+{{- range .Values.ingress.extraHosts }}
+  or http://{{ . }}/  (needs no hosts file entry)
+{{- end }}
 {{- end }}

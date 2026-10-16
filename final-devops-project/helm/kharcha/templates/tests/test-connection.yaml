@@ -10,7 +10,9 @@ metadata:
     {{- include "kharcha.labels" . | nindent 4 }}
   annotations:
     "helm.sh/hook": test
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    # Not hook-succeeded: the pod has to survive long enough for
+    # `helm test --logs` to read it. The next test run deletes it first.
+    "helm.sh/hook-delete-policy": before-hook-creation
 spec:
   restartPolicy: Never
   automountServiceAccountToken: false

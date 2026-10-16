@@ -74,6 +74,9 @@ ingress:
   enabled: true
   className: nginx
   host: kharcha.local
+  # More hostnames serving the same routes, e.g. a nip.io name that resolves to
+  # 127.0.0.1 so a browser can reach the Ingress without editing a hosts file.
+  extraHosts: []
 
 metrics:
   # Adds prometheus.io/* annotations so Prometheus' kubernetes-pods job finds
