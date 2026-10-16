@@ -1,0 +1,30 @@
+# LAB: a Service whose selector matches no pods.
+#
+# Apply it next to a running Kharcha release (the lab namespace has one):
+#   kubectl apply -n kharcha-lab -f troubleshooting/broken-service.yaml
+#   kubectl get svc,endpointslices -n kharcha-lab -l lab=broken-service   # no endpoints
+#   kubectl get pods -n kharcha-lab --show-labels | grep backend          # what the pods are really labelled
+#
+# The lesson: a Service finds its pods ONLY by labels. One wrong label value
+# means no endpoints, which means every connection is refused, while every
+# pod looks perfectly healthy.
+#
+# Fix: make the selector match the pods' labels:
+#   kubectl patch svc backend-broken -n kharcha-lab --type merge \
+#     -p '{"spec":{"selector":{"app.kubernetes.io/component":"backend"}}}'
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-broken
+  labels:
+    lab: broken-service
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: kharcha
+    app.kubernetes.io/instance: kharcha
+    app.kubernetes.io/component: api        # <-- the bug: the pods say "backend"
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000

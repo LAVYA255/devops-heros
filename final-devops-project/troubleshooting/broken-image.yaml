@@ -1,0 +1,47 @@
+# LAB: a Deployment whose image tag does not exist.
+#
+#   kubectl apply -n kharcha-lab -f troubleshooting/broken-image.yaml
+#   kubectl get pods -n kharcha-lab -l app=broken-image          # ErrImagePull / ImagePullBackOff
+#   kubectl describe pod -n kharcha-lab -l app=broken-image      # Events: "...:does-not-exist: not found"
+#   kubectl get events -n kharcha-lab --sort-by=.lastTimestamp | tail
+#
+# Fix: point it at a tag that CI actually pushed, e.g.
+#   kubectl set image -n kharcha-lab deploy/broken-image web=ghcr.io/lavya255/kharcha-frontend:<sha>
+# Clean up:
+#   kubectl delete -n kharcha-lab -f troubleshooting/broken-image.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: broken-image
+  labels:
+    app: broken-image
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: broken-image
+  template:
+    metadata:
+      labels:
+        app: broken-image
+    spec:
+      automountServiceAccountToken: false
+      # Passes the namespace's "restricted" Pod Security policy, so the only
+      # thing wrong with this pod is the tag below.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: web
+          image: ghcr.io/lavya255/kharcha-frontend:does-not-exist   # <-- the bug
+          ports:
+            - containerPort: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {cpu: 100m, memory: 64Mi}
