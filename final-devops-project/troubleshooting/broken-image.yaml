@@ -40,8 +40,19 @@ spec:
             - containerPort: 8080
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
           resources:
             requests: {cpu: 10m, memory: 16Mi}
             limits: {cpu: 100m, memory: 64Mi}
+          # Read-only root filesystem, so nginx gets writable scratch space
+          # (same mounts as the chart's frontend Deployment).
+          volumeMounts:
+            - {name: nginx-conf, mountPath: /etc/nginx/conf.d}
+            - {name: nginx-cache, mountPath: /var/cache/nginx}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - {name: nginx-conf, emptyDir: {}}
+        - {name: nginx-cache, emptyDir: {}}
+        - {name: tmp, emptyDir: {}}
