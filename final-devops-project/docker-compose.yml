@@ -17,6 +17,11 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-kharcha_local_dev_only}
     volumes:
       - pgdata:/var/lib/postgresql/data
+    # Published on 127.0.0.1 only, so a backend run straight from a venv
+    # (README, "Run it without Docker") can reach it. Never on 0.0.0.0: the
+    # database should not be reachable from the rest of the network.
+    ports:
+      - "127.0.0.1:5432:5432"
     # A real readiness check, so the backend waits for Postgres to accept
     # connections rather than just for the container to exist.
     healthcheck:
