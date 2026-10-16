@@ -5,7 +5,7 @@
 images:
   registry: ghcr.io/lavya255
   # Set by CI to the commit SHA it just built, scanned and pushed.
-  tag: "ac8a8d7"
+  tag: "352be7d"
   pullPolicy: IfNotPresent
 
 ingress:
