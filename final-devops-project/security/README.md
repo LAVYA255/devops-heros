@@ -44,6 +44,12 @@ kharcha-backend:a5e2e0d:  {'HIGH': 44, 'LOW': 61, 'MEDIUM': 58, 'UNKNOWN': 3}  f
 
 The frontend went from 176 vulnerabilities to **zero at any severity**. The price is a 21 MB layer, because the upgraded packages sit on top of the old ones in the base layer. The real long-term fix is a newer base image once upstream publishes one; until then this is the honest trade.
 
+### Five days later, a new CVE, and a cache that froze the patch
+
+On Oct 21 the gate blocked the frontend again: one HIGH, `libexpat` CVE-2026-77214, published after my last green build, with a fixed version (2.9.0-r0) already in Alpine's repository. My Dockerfile runs `apk upgrade` precisely to pick up fixes like that, so why didn't it? The CI log said `RUN apk upgrade ... CACHED`. The build had reused the layer from Oct 16, so the upgrade never ran again and the image kept the old library.
+
+The fix: the runtime stage is named (`AS runtime`) and the pipeline builds it with `no-cache-filters: runtime`, so `apk upgrade` runs fresh every time while the slow npm build stage stays cached. A fresh build has `libexpat-2.9.0-r0` and passes the gate. Lesson: a layer cache is a snapshot of the internet on the day it was made, and a security patch step must never come from one.
+
 ### Why the backend passes with 44 HIGHs
 
 The backend is on `python:3.12-slim` (Debian 13). Its 44 HIGH findings are all in Debian packages with **no fixed version available yet**, which is what `--ignore-unfixed` in the gate means: fail on what I can act on today, report everything else. The full report (every severity, fixed or not) is uploaded as a build artifact on every run, so nothing is hidden, it just does not block. The 2 fixable findings are LOW/MEDIUM.

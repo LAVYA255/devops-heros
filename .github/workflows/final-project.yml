@@ -328,6 +328,12 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+          # The frontend's runtime stage runs `apk upgrade` to pick up Alpine
+          # security fixes. Reusing that layer from cache froze the patches at
+          # the day it was first built, and a CVE fixed upstream days later
+          # still shipped (caught by the Trivy gate). That stage always
+          # rebuilds; the npm build stage stays cached.
+          no-cache-filters: ${{ matrix.service == 'frontend' && 'runtime' || '' }}
 
       - name: Image size and user
         run: |

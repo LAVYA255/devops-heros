@@ -18,7 +18,11 @@ RUN npm run build
 # nginx-unprivileged runs as uid 101 and listens on 8080, so it never needs
 # root to bind a low port.
 # ---------------------------------------------------------------------------
-FROM nginxinc/nginx-unprivileged:1.29-alpine
+# Named so CI can rebuild it without the layer cache (no-cache-filters:
+# runtime). Its `apk upgrade` layer must run fresh on every build: a cached
+# copy from Oct 16 once shipped libexpat with CVE-2026-77214 even though the
+# fix was already in Alpine's repo, and the Trivy gate blocked the release.
+FROM nginxinc/nginx-unprivileged:1.29-alpine AS runtime
 
 # Same-origin by default: /api is proxied to the backend service.
 ENV BACKEND_UPSTREAM=http://backend:8000 \
