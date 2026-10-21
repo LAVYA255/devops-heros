@@ -32,7 +32,7 @@
 | 19 | Cloud & Terraform in action | [README](session19-cloud-terraform/README.md) |
 | 20 | Monitoring, observability & GitOps | [README](session20-monitoring-observability-gitops/README.md) |
 | 21 | Final project (TaskBoard) | [README](session21-python/README.md) |
-| Capstone | **Kharcha**: my own app, end to end (CI/CD, DevSecOps, Helm, Terraform, monitoring, GitOps) | [README](final-devops-project/README.md) |
+| Capstone | **Kharcha**: my own app, end to end (CI/CD, DevSecOps, Helm, Terraform, monitoring, GitOps) | [README](final-devops-project/README.md) · [video](final-devops-project/presentation/Kharcha-explainer-video.mp4) · [slides](final-devops-project/presentation/Kharcha-DevOps-Capstone.pptx) |
 
 Sessions 16 and 17 run as real pipelines on this repository:
 [Session 16 run](https://github.com/LAVYA255/devops-heros/actions/workflows/session16-cicd.yml)  and

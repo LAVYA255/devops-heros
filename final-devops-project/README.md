@@ -10,8 +10,30 @@ That is the application. The project is everything around it: tests that gate ev
 
 > **One honest caveat up front.** The AWS part ran against **LocalStack** (an AWS emulator), not a real AWS account; I have no paid account and no credentials were used anywhere. The VPC applies for real there. EKS cannot, because LocalStack's free edition has no EKS API, and the [Terraform README](terraform/README.md) shows that failure and gives the exact commands for a real account. Everything Kubernetes ran on Minikube, plus a fresh kind cluster in every CI run.
 
+## Presentation and video
+
+**Watch:** a 73-second explainer of the app and the whole pipeline (1080p).
+
+[![Kharcha explainer, highlights](screenshots/presentation/video-highlights.gif)](presentation/Kharcha-explainer-video.mp4)
+
+[![Watch the Kharcha explainer video](screenshots/presentation/video-poster.jpg)](presentation/Kharcha-explainer-video.mp4)
+
+The highlights above loop four moments from the video: adding an expense, the stack, the backend pods on Kubernetes and the GitOps hand-off. Click either image to open the full video on GitHub, where it plays in the browser, or download [`Kharcha-explainer-video.mp4`](presentation/Kharcha-explainer-video.mp4).
+
+**Present:** [`Kharcha-DevOps-Capstone.pptx`](presentation/Kharcha-DevOps-Capstone.pptx), 20 slides. Every slide has a narration script in its speaker notes, and slide 18 is the live-demo plan in the course guide's order.
+
+![All 20 slides of the deck](screenshots/presentation/deck-overview.jpg)
+
+| | |
+| --- | --- |
+| ![From one commit to running pods](screenshots/presentation/deck-slide-03.jpg) | ![Architecture](screenshots/presentation/deck-slide-04.jpg) |
+| From one commit to running pods | Architecture |
+| ![DevSecOps: 43 CVEs to 0](screenshots/presentation/deck-slide-09.jpg) | ![Real bugs found by breaking things](screenshots/presentation/deck-slide-17.jpg) |
+| DevSecOps: the gate blocked my first image | Real bugs found by breaking things |
+
 ## Contents
 
+- [Presentation and video](#presentation-and-video)
 - [Where each rubric module lives](#where-each-rubric-module-lives)
 - [Architecture](#architecture)
 - [Technologies](#technologies)
@@ -42,7 +64,7 @@ That is the application. The project is everything around it: tests that gate ev
 | M7 Terraform | [`terraform/`](terraform) | `terminal/17` to `20-terraform-*.png` (LocalStack, see caveat) |
 | M8 Kubernetes + Helm | [`kubernetes/`](kubernetes) (the rubric's `k8s/`), [`helm/kharcha/`](helm/kharcha) | `terminal/07-helm-install.png`, `35-final-cluster-state.png`, `09-ingress-routing.png`, `38-hpa-autoscaling.png` |
 | M9 Observability | [`monitoring/`](monitoring), `/metrics` in [`metrics.py`](application/backend/app/metrics.py) | `terminal/34-metrics-endpoint.png`, `screenshots/07-prometheus-targets.jpg`, `09-grafana-dashboard.jpg` |
-| M10 Docs + demo | this file, [`gitops/README.md`](gitops/README.md#the-live-demo-one-commit-to-running-pods) | `terminal/31-gitops-demo.png`, `screenshots/04` to `06-demo-*.jpg` |
+| M10 Docs + demo | this file, [`gitops/README.md`](gitops/README.md#the-live-demo-one-commit-to-running-pods), [video](presentation/Kharcha-explainer-video.mp4), [deck](presentation/Kharcha-DevOps-Capstone.pptx) | `terminal/31-gitops-demo.png`, `screenshots/04` to `06-demo-*.jpg` |
 
 The folder layout follows the Session 21 assignment (`application/ docker/ kubernetes/ helm/ terraform/ .github/workflows/ security/ monitoring/ gitops/`), plus `scripts/` (the load test), `troubleshooting/` and `screenshots/`.
 
